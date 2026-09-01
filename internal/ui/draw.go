@@ -128,9 +128,10 @@ func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
 	if g.font == nil {
 		return
 	}
-	const radius = 4 // rows shown above/below the selection
-	rows := radius*2 + 1
-	rowH := float64(areaH) / float64(rows)
+	// Fixed row height so line spacing looks the same at any window size;
+	// how many rows fit (above/below the selection) adapts to areaH instead.
+	rowH := float64(glyphCellH*listScale) * 2
+	radius := int(float64(areaH) / 2 / rowH)
 	textX := float64(x) + listPadding
 
 	barColor := dimBar
