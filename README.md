@@ -19,6 +19,9 @@ Every cart is always in play — how it's shown just depends on the view:
   hairline placeholder tile with its title centered instead of art.
 - **List mode**: every title as a row, current selection in the middle.
 - **`` ` `` (backtick)**: toggle between carasel and list mode.
+- **Type a letter**: jumps to the first cart whose title starts with it.
+  Keep typing within ~0.7s to search a longer prefix; pause and the next
+  letter starts a new search.
 - **Launch and close launcher**: `Space`/`Enter`, or `A`/`Start` on a
   controller.
 - **Launch and keep launcher open**: hold `Shift` while launching, or use
