@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	bg          = color.RGBA{16, 16, 20, 255}
-	placeholder = color.RGBA{40, 40, 48, 255}
-	highlight   = color.RGBA{255, 204, 0, 255}
-	dim         = color.RGBA{90, 90, 100, 255}
+	bg     = color.RGBA{16, 16, 20, 255}
+	white  = color.RGBA{255, 255, 255, 255}
+	black  = color.RGBA{0, 0, 0, 255}
+	dimBar = color.RGBA{70, 70, 74, 255}
 )
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -36,31 +36,38 @@ func (g *Game) drawMessage(screen *ebiten.Image, msg string) {
 	if g.face == nil {
 		return
 	}
+	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
 	opt := &text.DrawOptions{}
-	opt.GeoM.Translate(ScreenW/2, ScreenH/2)
+	opt.GeoM.Translate(float64(w)/2, float64(h)/2)
 	opt.PrimaryAlign = text.AlignCenter
 	opt.SecondaryAlign = text.AlignCenter
 	opt.ColorScale.ScaleWithColor(color.White)
 	text.Draw(screen, msg, g.face, opt)
 }
 
-const (
-	tileSize   = 200
-	listTileSz = 64
-	listGap    = 12
-)
-
 func (g *Game) drawBrowsing(screen *ebiten.Image) {
-	if len(g.carasel) > 0 {
-		g.drawCarasel(screen)
-	}
-	if len(g.list) > 0 {
-		g.drawList(screen)
+	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
+	showCarasel := len(g.carasel) > 0
+	showList := len(g.list) > 0
+
+	switch {
+	case showCarasel && showList:
+		g.drawCarasel(screen, 0, w/2, h)
+		g.drawList(screen, w/2, w/2, h)
+	case showCarasel:
+		g.drawCarasel(screen, 0, w, h)
+	case showList:
+		g.drawList(screen, 0, w, h)
 	}
 }
 
-func (g *Game) drawCarasel(screen *ebiten.Image) {
-	cx, cy := ScreenW*0.38, ScreenH*0.5
+// drawCarasel renders the cover-art carasel centered in [x, x+areaW).
+func (g *Game) drawCarasel(screen *ebiten.Image, x, areaW, areaH int) {
+	cx := float64(x) + float64(areaW)/2
+	cy := float64(areaH) / 2
+	centerH := float64(areaH) * 0.55
+	gap := centerH * 0.9
+
 	for off := -1; off <= 1; off++ {
 		idx := wrap(g.caraselIdx+off, len(g.carasel))
 		cart := g.carasel[idx]
@@ -69,39 +76,56 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 			continue
 		}
 		scale := 1.0
-		alpha := 1.0
+		alpha := float32(1.0)
 		if off != 0 {
 			scale = 0.7
 			alpha = 0.35
 		}
-		w, h := img.Bounds().Dx(), img.Bounds().Dy()
-		s := float64(tileSize) * scale / float64(h)
+		iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
+		s := centerH * scale / float64(ih)
 		opt := &ebiten.DrawImageOptions{}
 		opt.GeoM.Scale(s, s)
-		opt.GeoM.Translate(cx+float64(off)*float64(tileSize)*0.9-float64(w)*s/2, cy-float64(h)*s/2)
-		opt.ColorScale.ScaleAlpha(float32(alpha))
+		opt.GeoM.Translate(cx+float64(off)*gap-float64(iw)*s/2, cy-float64(ih)*s/2)
+		opt.ColorScale.ScaleAlpha(alpha)
 		screen.DrawImage(img, opt)
-	}
-	if g.lastPanel == panelCarasel {
-		drawBorder(screen, cx-tileSize/2-6, cy-tileSize/2-6, tileSize+12, tileSize+12, highlight)
 	}
 }
 
-func (g *Game) drawList(screen *ebiten.Image) {
-	x := ScreenW*0.8 - listTileSz/2
-	total := len(g.list)
-	top := ScreenH/2 - (total*(listTileSz+listGap))/2
-	for i, _ := range g.list {
-		y := top + i*(listTileSz+listGap)
-		col := placeholder
-		selected := i == g.listIdx
-		if selected {
-			col = dim
+// drawList renders the plain-cart title list centered in [x, x+areaW), with
+// the current selection always in the middle row.
+func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
+	if g.face == nil {
+		return
+	}
+	const radius = 4 // rows shown above/below the selection
+	rows := radius*2 + 1
+	rowH := float64(areaH) / float64(rows)
+	cx := float64(x) + float64(areaW)/2
+
+	barColor := dimBar
+	textOnBar := white
+	if g.lastPanel == panelList {
+		barColor = white
+		textOnBar = black
+	}
+
+	for off := -radius; off <= radius; off++ {
+		idx := wrap(g.listIdx+off, len(g.list))
+		cart := g.list[idx]
+		rowY := float64(areaH)/2 + float64(off)*rowH
+
+		col := white
+		if off == 0 {
+			fillRect(screen, float64(x), rowY-rowH/2, float64(areaW), rowH, barColor)
+			col = textOnBar
 		}
-		fillRect(screen, float64(x), float64(y), listTileSz, listTileSz, col)
-		if selected && g.lastPanel == panelList {
-			drawBorder(screen, float64(x)-4, float64(y)-4, listTileSz+8, listTileSz+8, highlight)
-		}
+
+		opt := &text.DrawOptions{}
+		opt.GeoM.Translate(cx, rowY)
+		opt.PrimaryAlign = text.AlignCenter
+		opt.SecondaryAlign = text.AlignCenter
+		opt.ColorScale.ScaleWithColor(col)
+		text.Draw(screen, cart.Name, g.face, opt)
 	}
 }
 
@@ -133,12 +157,4 @@ func fillRect(screen *ebiten.Image, x, y, w, h float64, c color.Color) {
 	opt := &ebiten.DrawImageOptions{}
 	opt.GeoM.Translate(x, y)
 	screen.DrawImage(sub, opt)
-}
-
-func drawBorder(screen *ebiten.Image, x, y, w, h float64, c color.Color) {
-	const t = 3.0
-	fillRect(screen, x, y, w, t, c)
-	fillRect(screen, x, y+h-t, w, t, c)
-	fillRect(screen, x, y, t, h, c)
-	fillRect(screen, x+w-t, y, t, h, c)
 }

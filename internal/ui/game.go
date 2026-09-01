@@ -47,6 +47,8 @@ type Game struct {
 	returnState state       // state to restore to if the user cancels a picker
 	pickerErr   chan string // resolved path or "" on cancel/failure
 
+	allCarts   []carts.Cart
+	listOnly   bool // debug: force every cart into the list panel
 	carasel    []carts.Cart
 	list       []carts.Cart
 	caraselIdx int
@@ -105,18 +107,34 @@ func (g *Game) loadCarts() {
 		g.state = stateNoCarts
 		return
 	}
-	g.carasel, g.list = carts.Split(all)
+	g.allCarts = all
+	g.rebuildPanels()
+	g.state = stateBrowsing
+}
+
+// rebuildPanels splits g.allCarts into the carasel/list panels (or, in
+// debug list-only mode, puts everything in the list) and resets selection.
+func (g *Game) rebuildPanels() {
+	if g.listOnly {
+		g.carasel = nil
+		g.list = append([]carts.Cart(nil), g.allCarts...)
+	} else {
+		g.carasel, g.list = carts.Split(g.allCarts)
+	}
 	g.caraselIdx, g.listIdx = 0, 0
 	g.lastPanel = panelCarasel
 	if len(g.carasel) == 0 {
 		g.lastPanel = panelList
 	}
-	g.state = stateBrowsing
 }
 
 // --- ebiten.Game ---
 
-func (g *Game) Layout(_, _ int) (int, int) { return ScreenW, ScreenH }
+// Layout returns the window size unchanged so the UI always fills whatever
+// space the user resizes the window to, with no fixed width/height cap.
+func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
+	return outsideWidth, outsideHeight
+}
 
 func (g *Game) Update() error {
 	switch g.state {
@@ -148,8 +166,9 @@ func (g *Game) Update() error {
 		}
 	case statePickingCarts:
 		g.pollPicker(func(p string) {
-			if p == "" {
-				// cancelled: leave the existing config untouched.
+			if p == "" || p == g.cfg.CartsDir {
+				// cancelled, or re-confirmed the same folder: don't touch
+				// the carasel/list or reset the current selection.
 				g.state = g.returnState
 				return
 			}
@@ -215,10 +234,15 @@ func (g *Game) pollPicker(onResult func(string)) {
 
 func (g *Game) updateBrowsing() {
 	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
+		alt := ebiten.IsKeyPressed(ebiten.KeyAltLeft) || ebiten.IsKeyPressed(ebiten.KeyAltRight)
 		shift := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
-		if shift {
+		switch {
+		case alt:
+			g.listOnly = !g.listOnly
+			g.rebuildPanels()
+		case shift:
 			g.pickPico8()
-		} else {
+		default:
 			g.pickCarts()
 		}
 		return
@@ -307,7 +331,8 @@ func (g *Game) selfHeal(cart carts.Cart) bool {
 	}
 	if _, err := os.Stat(cart.Path); err != nil {
 		if all := carts.Scan(g.cfg.CartsDir); all != nil {
-			g.carasel, g.list = carts.Split(all)
+			g.allCarts = all
+			g.rebuildPanels()
 			healed = true
 		}
 	}
