@@ -8,12 +8,12 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
-	"github.com/sqweek/dialog"
 	"golang.org/x/image/font/gofont/goregular"
 
 	"github.com/stagwoodink/pico-launcher/internal/carts"
 	"github.com/stagwoodink/pico-launcher/internal/config"
 	"github.com/stagwoodink/pico-launcher/internal/launcher"
+	"github.com/stagwoodink/pico-launcher/internal/picker"
 	"github.com/stagwoodink/pico-launcher/internal/pico8"
 )
 
@@ -164,7 +164,7 @@ func (g *Game) pickPico8() {
 	g.state = statePickingPico8
 	g.pickerErr = make(chan string, 1)
 	go func() {
-		p, err := dialog.Directory().Title("Select your PICO-8 install folder").Browse()
+		p, err := picker.Directory("Select your PICO-8 install folder")
 		if err != nil {
 			p = ""
 		}
@@ -176,7 +176,7 @@ func (g *Game) pickPico8File() {
 	g.state = statePickingPico8
 	g.pickerErr = make(chan string, 1)
 	go func() {
-		p, err := dialog.File().Title("Select the PICO-8 executable").Load()
+		p, err := picker.File("Select the PICO-8 executable")
 		if err != nil {
 			p = ""
 		}
@@ -188,7 +188,7 @@ func (g *Game) pickCarts() {
 	g.state = statePickingCarts
 	g.pickerErr = make(chan string, 1)
 	go func() {
-		p, err := dialog.Directory().Title("Select your carts folder").Browse()
+		p, err := picker.Directory("Select your carts folder")
 		if err != nil {
 			p = ""
 		}
@@ -205,6 +205,16 @@ func (g *Game) pollPicker(onResult func(string)) {
 }
 
 func (g *Game) updateBrowsing() {
+	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
+		shift := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
+		if shift {
+			g.pickPico8()
+		} else {
+			g.pickCarts()
+		}
+		return
+	}
+
 	if len(g.carasel) > 0 {
 		if inpututil.IsKeyJustPressed(ebiten.KeyLeft) || padJustPressed(dpadLeft) {
 			g.caraselIdx = wrap(g.caraselIdx-1, len(g.carasel))
