@@ -130,7 +130,7 @@ func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
 	}
 	// Fixed row height so line spacing looks the same at any window size;
 	// how many rows fit (above/below the selection) adapts to areaH instead.
-	rowH := float64(glyphCellH*listScale) * 2
+	rowH := float64(glyphCellH*listScale) * 3.5
 	radius := int(float64(areaH) / 2 / rowH)
 	textX := float64(x) + listPadding
 
