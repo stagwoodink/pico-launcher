@@ -76,6 +76,23 @@ func (f *bitmapFont) width(s string, scale int) float64 {
 	return float64(len([]rune(s)) * glyphCellW * scale)
 }
 
+// truncate shortens s with a trailing "..." if it's wider than maxWidth at
+// the given scale, so list rows never overflow their column.
+func (f *bitmapFont) truncate(s string, maxWidth float64, scale int) string {
+	if f.width(s, scale) <= maxWidth {
+		return s
+	}
+	maxChars := int(maxWidth) / (glyphCellW * scale)
+	if maxChars <= 3 {
+		return "..."[:max(0, maxChars)]
+	}
+	runes := []rune(s)
+	if maxChars > len(runes) {
+		maxChars = len(runes)
+	}
+	return string(runes[:maxChars-3]) + "..."
+}
+
 // draw renders s with its vertical center at y. x is the left edge for
 // alignStart, or the horizontal center for alignCenter.
 func (f *bitmapFont) draw(dst *ebiten.Image, s string, x, y float64, scale int, col color.Color, a align) {

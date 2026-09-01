@@ -133,6 +133,7 @@ func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
 	rowH := float64(glyphCellH*listScale) * 3.5
 	radius := int(float64(areaH) / 2 / rowH)
 	textX := float64(x) + listPadding
+	maxTextW := float64(areaW) - listPadding*2
 
 	barColor := dimBar
 	textOnBar := white
@@ -152,7 +153,8 @@ func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
 			col = textOnBar
 		}
 
-		g.font.draw(screen, cart.Name, textX, rowY, listScale, col, alignStart)
+		name := g.font.truncate(cart.Name, maxTextW, listScale)
+		g.font.draw(screen, name, textX, rowY, listScale, col, alignStart)
 	}
 }
 
