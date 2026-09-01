@@ -52,8 +52,9 @@ func (g *Game) drawBrowsing(screen *ebiten.Image) {
 	switch {
 	case showCarasel && showList:
 		listW := g.listWidth(w)
+		caraselX := listW + panelGutter
 		g.drawList(screen, 0, listW, h)
-		g.drawCarasel(screen, listW, w-listW, h)
+		g.drawCarasel(screen, caraselX, w-caraselX, h)
 	case showCarasel:
 		g.drawCarasel(screen, 0, w, h)
 	case showList:
@@ -61,7 +62,10 @@ func (g *Game) drawBrowsing(screen *ebiten.Image) {
 	}
 }
 
-const listPadding = 24
+const (
+	listPadding = 24
+	panelGutter = 32 // hard whitespace between the list and carasel panels
+)
 
 // listWidth sizes the list panel to fit its longest title, capped so the
 // carasel always keeps most of the screen.
@@ -83,11 +87,16 @@ func (g *Game) listWidth(screenW int) int {
 	return width
 }
 
-// drawCarasel renders the cover-art carasel centered in [x, x+areaW).
+// drawCarasel renders the cover-art carasel centered in [x, x+areaW),
+// scaling the tile size to whichever dimension is tighter so the side
+// covers never spill outside the carasel's own area.
 func (g *Game) drawCarasel(screen *ebiten.Image, x, areaW, areaH int) {
 	cx := float64(x) + float64(areaW)/2
 	cy := float64(areaH) / 2
 	centerH := float64(areaH) * 0.55
+	if byWidth := float64(areaW) * 0.45; byWidth < centerH {
+		centerH = byWidth
+	}
 	gap := centerH * 0.9
 
 	for off := -1; off <= 1; off++ {
