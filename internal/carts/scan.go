@@ -106,16 +106,3 @@ func Scan(dir string) []Cart {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
-
-// Split separates carts into the image carasel (has cover art) and the
-// plain list (no cover art).
-func Split(all []Cart) (withImage, withoutImage []Cart) {
-	for _, c := range all {
-		if c.Image != "" {
-			withImage = append(withImage, c)
-		} else {
-			withoutImage = append(withoutImage, c)
-		}
-	}
-	return
-}

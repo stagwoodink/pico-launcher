@@ -5,6 +5,7 @@ import (
 	"image/color"
 	_ "image/png"
 	"os"
+	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
@@ -15,10 +16,9 @@ const (
 )
 
 var (
-	bg     = color.RGBA{16, 16, 20, 255}
-	white  = color.RGBA{255, 255, 255, 255}
-	black  = color.RGBA{0, 0, 0, 255}
-	dimBar = color.RGBA{70, 70, 74, 255}
+	bg    = color.RGBA{16, 16, 20, 255}
+	white = color.RGBA{255, 255, 255, 255}
+	black = color.RGBA{0, 0, 0, 255}
 )
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -32,7 +32,12 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	case stateNoCarts:
 		g.drawMessage(screen, "no carts found")
 	case stateBrowsing:
-		g.drawBrowsing(screen)
+		switch g.mode {
+		case modeCarasel:
+			g.drawCarasel(screen)
+		case modeList:
+			g.drawList(screen)
+		}
 	}
 }
 
@@ -41,119 +46,100 @@ func (g *Game) drawMessage(screen *ebiten.Image, msg string) {
 		return
 	}
 	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
-	g.font.draw(screen, msg, float64(w)/2, float64(h)/2, messageScale, white, alignCenter)
+	g.font.draw(screen, strings.ToUpper(msg), float64(w)/2, float64(h)/2, messageScale, white, alignCenter)
 }
 
-func (g *Game) drawBrowsing(screen *ebiten.Image) {
+// cartAspect matches PICO-8's own cart cover art (160x205), used to size
+// the placeholder tile for carts with no cover image.
+const cartAspect = 160.0 / 205.0
+
+// drawCarasel renders the cover-art carasel across the full window, with
+// the selection centered and neighbors dimmed to the sides. Carts with no
+// cover image get a hairline placeholder tile with their title centered.
+func (g *Game) drawCarasel(screen *ebiten.Image) {
 	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
-	showCarasel := len(g.carasel) > 0
-	showList := len(g.list) > 0
-
-	switch {
-	case showCarasel && showList:
-		listW := g.listWidth(w)
-		caraselX := listW + panelGutter
-		g.drawList(screen, 0, listW, h)
-		g.drawCarasel(screen, caraselX, w-caraselX, h)
-	case showCarasel:
-		g.drawCarasel(screen, 0, w, h)
-	case showList:
-		g.drawList(screen, 0, w, h)
-	}
-}
-
-const (
-	listPadding = 24
-	panelGutter = 32 // hard whitespace between the list and carasel panels
-)
-
-// listWidth sizes the list panel to fit its longest title, capped so the
-// carasel always keeps most of the screen.
-func (g *Game) listWidth(screenW int) int {
-	if g.font == nil || len(g.list) == 0 {
-		return 0
-	}
-	maxW := 0.0
-	for _, c := range g.list {
-		w := g.font.width(c.Name, listScale)
-		if w > maxW {
-			maxW = w
-		}
-	}
-	width := int(maxW) + listPadding*2
-	if cap := screenW * 45 / 100; width > cap {
-		width = cap
-	}
-	return width
-}
-
-// drawCarasel renders the cover-art carasel centered in [x, x+areaW),
-// scaling the tile size to whichever dimension is tighter so the side
-// covers never spill outside the carasel's own area.
-func (g *Game) drawCarasel(screen *ebiten.Image, x, areaW, areaH int) {
-	cx := float64(x) + float64(areaW)/2
-	cy := float64(areaH) / 2
-	centerH := float64(areaH) * 0.55
-	if byWidth := float64(areaW) * 0.45; byWidth < centerH {
+	cx, cy := float64(w)/2, float64(h)/2
+	centerH := float64(h) * 0.55
+	if byWidth := float64(w) * 0.45; byWidth < centerH {
 		centerH = byWidth
 	}
 	gap := centerH * 0.9
 
 	for off := -1; off <= 1; off++ {
-		idx := wrap(g.caraselIdx+off, len(g.carasel))
-		cart := g.carasel[idx]
-		img := g.thumbnail(cart.Image)
-		if img == nil {
-			continue
-		}
+		idx := wrap(g.idx+off, len(g.allCarts))
+		cart := g.allCarts[idx]
+
 		scale := 1.0
 		alpha := float32(1.0)
 		if off != 0 {
 			scale = 0.7
 			alpha = 0.35
 		}
-		iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
-		s := centerH * scale / float64(ih)
-		opt := &ebiten.DrawImageOptions{}
-		opt.GeoM.Scale(s, s)
-		opt.GeoM.Translate(cx+float64(off)*gap-float64(iw)*s/2, cy-float64(ih)*s/2)
-		opt.ColorScale.ScaleAlpha(alpha)
-		screen.DrawImage(img, opt)
+		tileH := centerH * scale
+		tileX := cx + float64(off)*gap
+
+		if img := g.thumbnail(cart.Image); img != nil {
+			iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
+			s := tileH / float64(ih)
+			opt := &ebiten.DrawImageOptions{}
+			opt.GeoM.Scale(s, s)
+			opt.GeoM.Translate(tileX-float64(iw)*s/2, cy-float64(ih)*s/2)
+			opt.ColorScale.ScaleAlpha(alpha)
+			screen.DrawImage(img, opt)
+			continue
+		}
+
+		tileW := tileH * cartAspect
+		g.drawPlaceholderCart(screen, tileX-tileW/2, cy-tileH/2, tileW, tileH, alpha, cart.Name)
 	}
 }
 
-// drawList renders the plain-cart title list centered in [x, x+areaW), with
-// the current selection always in the middle row.
-func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
+// drawPlaceholderCart draws a white hairline cart outline with the cart's
+// title centered inside, for carts that have no cover image.
+func (g *Game) drawPlaceholderCart(screen *ebiten.Image, x, y, w, h float64, alpha float32, name string) {
+	const border = 2.0
+	c := color.RGBA{255, 255, 255, uint8(255 * alpha)}
+	fillRect(screen, x, y, w, border, c)
+	fillRect(screen, x, y+h-border, w, border, c)
+	fillRect(screen, x, y, border, h, c)
+	fillRect(screen, x+w-border, y, border, h, c)
+
 	if g.font == nil {
 		return
 	}
-	// Fixed row height so line spacing looks the same at any window size;
-	// how many rows fit (above/below the selection) adapts to areaH instead.
-	rowH := float64(glyphCellH*listScale) * 3.5
-	radius := int(float64(areaH) / 2 / rowH)
-	textX := float64(x) + listPadding
-	maxTextW := float64(areaW) - listPadding*2
+	label := g.font.truncate(strings.ToUpper(name), w-16, listScale)
+	g.font.draw(screen, label, x+w/2, y+h/2, listScale, c, alignCenter)
+}
 
-	barColor := dimBar
-	textOnBar := white
-	if g.lastPanel == panelList {
-		barColor = white
-		textOnBar = black
+const listPadding = 24
+
+// drawList renders every cart's title as a left-aligned row spanning the
+// full window, with the current selection always in the middle row.
+func (g *Game) drawList(screen *ebiten.Image) {
+	if g.font == nil {
+		return
 	}
+	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
+
+	// Fixed row height so line spacing looks the same at any window size;
+	// how many rows fit (above/below the selection) adapts to h instead.
+	rowH := float64(glyphCellH*listScale) * 3.5
+	radius := int(float64(h) / 2 / rowH)
+	textX := float64(listPadding)
+	maxTextW := float64(w) - listPadding*2
 
 	for off := -radius; off <= radius; off++ {
-		idx := wrap(g.listIdx+off, len(g.list))
-		cart := g.list[idx]
-		rowY := float64(areaH)/2 + float64(off)*rowH
+		idx := wrap(g.idx+off, len(g.allCarts))
+		cart := g.allCarts[idx]
+		rowY := float64(h)/2 + float64(off)*rowH
 
 		col := white
 		if off == 0 {
-			fillRect(screen, float64(x), rowY-rowH/2, float64(areaW), rowH, barColor)
-			col = textOnBar
+			fillRect(screen, 0, rowY-rowH/2, float64(w), rowH, white)
+			col = black
 		}
 
-		name := g.font.truncate(cart.Name, maxTextW, listScale)
+		name := g.font.truncate(strings.ToUpper(cart.Name), maxTextW, listScale)
 		g.font.draw(screen, name, textX, rowY, listScale, col, alignStart)
 	}
 }

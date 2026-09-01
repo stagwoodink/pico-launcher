@@ -18,12 +18,19 @@ import (
 var fontSheetPNG []byte
 
 const (
-	glyphCellW  = 8
+	glyphCellW  = 8 // column pitch in the source sheet
 	glyphCellH  = 8
 	glyphCols   = 16
 	glyphStartY = 16 // ASCII space (32) starts here; rows above are PICO-8's non-ASCII icon glyphs
 	firstRune   = ' '
 	lastRune    = '~'
+
+	// Every glyph's ink only fills the first few pixels of its 8px cell
+	// (verified across the whole printable range); cropping to that and
+	// advancing by a tighter step keeps text readable without the sheet's
+	// baked-in padding ballooning letter spacing.
+	glyphInkW    = 4
+	glyphAdvance = 5
 )
 
 type align int
@@ -67,13 +74,13 @@ func glyphRect(r rune) (image.Rectangle, bool) {
 	row := idx / glyphCols
 	x := col * glyphCellW
 	y := glyphStartY + row*glyphCellH
-	return image.Rect(x, y, x+glyphCellW, y+glyphCellH), true
+	return image.Rect(x, y, x+glyphInkW, y+glyphCellH), true
 }
 
 // width returns the on-screen pixel width of s at the given integer scale
 // (the font is monospace, so this is exact and cheap).
 func (f *bitmapFont) width(s string, scale int) float64 {
-	return float64(len([]rune(s)) * glyphCellW * scale)
+	return float64(len([]rune(s)) * glyphAdvance * scale)
 }
 
 // truncate shortens s with a trailing "..." if it's wider than maxWidth at
@@ -82,7 +89,7 @@ func (f *bitmapFont) truncate(s string, maxWidth float64, scale int) string {
 	if f.width(s, scale) <= maxWidth {
 		return s
 	}
-	maxChars := int(maxWidth) / (glyphCellW * scale)
+	maxChars := int(maxWidth) / (glyphAdvance * scale)
 	if maxChars <= 3 {
 		return "..."[:max(0, maxChars)]
 	}
@@ -111,7 +118,7 @@ func (f *bitmapFont) draw(dst *ebiten.Image, s string, x, y float64, scale int, 
 		sub := f.sheet.SubImage(rect).(*ebiten.Image)
 		opt := &ebiten.DrawImageOptions{}
 		opt.GeoM.Scale(float64(scale), float64(scale))
-		opt.GeoM.Translate(left+float64(i*glyphCellW*scale), top)
+		opt.GeoM.Translate(left+float64(i*glyphAdvance*scale), top)
 		opt.ColorScale.ScaleWithColor(col)
 		dst.DrawImage(sub, opt)
 	}

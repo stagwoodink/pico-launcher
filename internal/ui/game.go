@@ -30,11 +30,13 @@ const (
 	stateBrowsing
 )
 
-type panel int
+// viewMode is the whole-window display: every cart is always in play, only
+// how it's presented changes.
+type viewMode int
 
 const (
-	panelCarasel panel = iota
-	panelList
+	modeCarasel viewMode = iota // default: cover art, .p8-only carts get a placeholder tile
+	modeList
 )
 
 type Game struct {
@@ -44,13 +46,9 @@ type Game struct {
 	returnState state       // state to restore to if the user cancels a picker
 	pickerErr   chan string // resolved path or "" on cancel/failure
 
-	allCarts   []carts.Cart
-	listOnly   bool // `-key toggle: list-only view (all carts) vs. hybrid (carasel + .p8-only list)
-	carasel    []carts.Cart
-	list       []carts.Cart
-	caraselIdx int
-	listIdx    int
-	lastPanel  panel
+	allCarts []carts.Cart
+	idx      int
+	mode     viewMode
 
 	images map[string]*ebiten.Image
 
@@ -104,24 +102,8 @@ func (g *Game) loadCarts() {
 		return
 	}
 	g.allCarts = all
-	g.rebuildPanels()
+	g.idx = 0
 	g.state = stateBrowsing
-}
-
-// rebuildPanels splits g.allCarts into the carasel/list panels (or, in
-// debug list-only mode, puts everything in the list) and resets selection.
-func (g *Game) rebuildPanels() {
-	if g.listOnly {
-		g.carasel = nil
-		g.list = append([]carts.Cart(nil), g.allCarts...)
-	} else {
-		g.carasel, g.list = carts.Split(g.allCarts)
-	}
-	g.caraselIdx, g.listIdx = 0, 0
-	g.lastPanel = panelCarasel
-	if len(g.carasel) == 0 {
-		g.lastPanel = panelList
-	}
 }
 
 // --- ebiten.Game ---
@@ -164,7 +146,7 @@ func (g *Game) Update() error {
 		g.pollPicker(func(p string) {
 			if p == "" || p == g.cfg.CartsDir {
 				// cancelled, or re-confirmed the same folder: don't touch
-				// the carasel/list or reset the current selection.
+				// the current list or reset the current selection.
 				g.state = g.returnState
 				return
 			}
@@ -230,8 +212,11 @@ func (g *Game) pollPicker(onResult func(string)) {
 
 func (g *Game) updateBrowsing() {
 	if inpututil.IsKeyJustPressed(ebiten.KeyBackquote) {
-		g.listOnly = !g.listOnly
-		g.rebuildPanels()
+		if g.mode == modeCarasel {
+			g.mode = modeList
+		} else {
+			g.mode = modeCarasel
+		}
 		return
 	}
 
@@ -245,24 +230,16 @@ func (g *Game) updateBrowsing() {
 		return
 	}
 
-	if len(g.carasel) > 0 {
-		if inpututil.IsKeyJustPressed(ebiten.KeyLeft) || padJustPressed(dpadLeft) {
-			g.caraselIdx = wrap(g.caraselIdx-1, len(g.carasel))
-			g.lastPanel = panelCarasel
+	if len(g.allCarts) > 0 {
+		prev := inpututil.IsKeyJustPressed(ebiten.KeyLeft) || padJustPressed(dpadLeft) ||
+			inpututil.IsKeyJustPressed(ebiten.KeyUp) || padJustPressed(dpadUp)
+		next := inpututil.IsKeyJustPressed(ebiten.KeyRight) || padJustPressed(dpadRight) ||
+			inpututil.IsKeyJustPressed(ebiten.KeyDown) || padJustPressed(dpadDown)
+		if prev {
+			g.idx = wrap(g.idx-1, len(g.allCarts))
 		}
-		if inpututil.IsKeyJustPressed(ebiten.KeyRight) || padJustPressed(dpadRight) {
-			g.caraselIdx = wrap(g.caraselIdx+1, len(g.carasel))
-			g.lastPanel = panelCarasel
-		}
-	}
-	if len(g.list) > 0 {
-		if inpututil.IsKeyJustPressed(ebiten.KeyUp) || padJustPressed(dpadUp) {
-			g.listIdx = wrap(g.listIdx-1, len(g.list))
-			g.lastPanel = panelList
-		}
-		if inpututil.IsKeyJustPressed(ebiten.KeyDown) || padJustPressed(dpadDown) {
-			g.listIdx = wrap(g.listIdx+1, len(g.list))
-			g.lastPanel = panelList
+		if next {
+			g.idx = wrap(g.idx+1, len(g.allCarts))
 		}
 	}
 
@@ -277,13 +254,10 @@ func (g *Game) updateBrowsing() {
 }
 
 func (g *Game) selectedCart() (carts.Cart, bool) {
-	if g.lastPanel == panelCarasel && len(g.carasel) > 0 {
-		return g.carasel[g.caraselIdx], true
+	if len(g.allCarts) == 0 {
+		return carts.Cart{}, false
 	}
-	if g.lastPanel == panelList && len(g.list) > 0 {
-		return g.list[g.listIdx], true
-	}
-	return carts.Cart{}, false
+	return g.allCarts[g.idx], true
 }
 
 // launchSelected launches with silent self-healing: if it fails, it
@@ -329,7 +303,9 @@ func (g *Game) selfHeal(cart carts.Cart) bool {
 	if _, err := os.Stat(cart.Path); err != nil {
 		if all := carts.Scan(g.cfg.CartsDir); all != nil {
 			g.allCarts = all
-			g.rebuildPanels()
+			if g.idx >= len(g.allCarts) {
+				g.idx = 0
+			}
 			healed = true
 		}
 	}
