@@ -45,7 +45,7 @@ type Game struct {
 	pickerErr   chan string // resolved path or "" on cancel/failure
 
 	allCarts   []carts.Cart
-	listOnly   bool // debug: force every cart into the list panel
+	listOnly   bool // `-key toggle: list-only view (all carts) vs. hybrid (carasel + .p8-only list)
 	carasel    []carts.Cart
 	list       []carts.Cart
 	caraselIdx int
@@ -229,16 +229,17 @@ func (g *Game) pollPicker(onResult func(string)) {
 }
 
 func (g *Game) updateBrowsing() {
+	if inpututil.IsKeyJustPressed(ebiten.KeyBackquote) {
+		g.listOnly = !g.listOnly
+		g.rebuildPanels()
+		return
+	}
+
 	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
-		alt := ebiten.IsKeyPressed(ebiten.KeyAltLeft) || ebiten.IsKeyPressed(ebiten.KeyAltRight)
 		shift := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
-		switch {
-		case alt:
-			g.listOnly = !g.listOnly
-			g.rebuildPanels()
-		case shift:
+		if shift {
 			g.pickPico8()
-		default:
+		} else {
 			g.pickCarts()
 		}
 		return

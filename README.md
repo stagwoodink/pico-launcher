@@ -12,9 +12,13 @@ button.
 
 ## Interface
 
-- **Cart covers** (`.p8.png`, left carasel): `←`/`→` or D-pad to browse.
-- **Plain carts** (`.p8` with no matching cover, right list): `↑`/`↓` or
-  D-pad to browse. Whichever panel is empty just doesn't show.
+- **Cart covers** (`.p8.png`, right carasel): `←`/`→` or D-pad to browse.
+- **Plain carts** (`.p8` with no matching cover, left list): `↑`/`↓` or
+  D-pad to browse. Whichever panel is empty just doesn't show, and the
+  other takes the full window.
+- **`` ` `` (backtick)**: toggle list-only view, where every cart (`.p8`
+  and `.p8.png` alike) shows in the list. Press again for the normal
+  carasel + list hybrid.
 - **Launch and close launcher**: `Space`/`Enter`, or `A`/`Start` on a
   controller.
 - **Launch and keep launcher open**: hold `Shift` while launching, or use
