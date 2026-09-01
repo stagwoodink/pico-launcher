@@ -1,0 +1,49 @@
+package ui
+
+import (
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
+)
+
+// Standard gamepad button mapping (Xbox/PlayStation/generic all agree on
+// this via the browser Standard Gamepad layout ebiten follows):
+//   - aButton: bottom face button (A / Cross) — primary "launch" button
+//   - startButton: center-right (Start / Options)
+//   - selectButton: center-left (Select / Back / Share) — "keep open" launch
+const (
+	aButton      = ebiten.StandardGamepadButtonRightBottom
+	startButton  = ebiten.StandardGamepadButtonCenterRight
+	selectButton = ebiten.StandardGamepadButtonCenterLeft
+	dpadLeft     = ebiten.StandardGamepadButtonLeftLeft
+	dpadRight    = ebiten.StandardGamepadButtonLeftRight
+	dpadUp       = ebiten.StandardGamepadButtonLeftTop
+	dpadDown     = ebiten.StandardGamepadButtonLeftBottom
+)
+
+func gamepadIDs() []ebiten.GamepadID {
+	return ebiten.AppendGamepadIDs(nil)
+}
+
+func padJustPressed(b ebiten.StandardGamepadButton) bool {
+	for _, id := range gamepadIDs() {
+		if !ebiten.IsStandardGamepadLayoutAvailable(id) {
+			continue
+		}
+		if inpututil.IsStandardGamepadButtonJustPressed(id, b) {
+			return true
+		}
+	}
+	return false
+}
+
+func padHeld(b ebiten.StandardGamepadButton) bool {
+	for _, id := range gamepadIDs() {
+		if !ebiten.IsStandardGamepadLayoutAvailable(id) {
+			continue
+		}
+		if ebiten.IsStandardGamepadButtonPressed(id, b) {
+			return true
+		}
+	}
+	return false
+}
