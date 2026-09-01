@@ -110,8 +110,8 @@ func (g *Game) drawPlaceholderCart(screen *ebiten.Image, x, y, w, h float64, alp
 	drawOpts.ColorScale.ScaleWithColor(c)
 
 	fx, fy, fw, fh := float32(x), float32(y), float32(w), float32(h)
-	radius := fw * 0.10
-	chamfer := fw * 0.18
+	radius := fw * 0.04
+	chamfer := fw * 0.08
 
 	var outline vector.Path
 	outline.MoveTo(fx+radius, fy)
