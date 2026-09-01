@@ -20,7 +20,15 @@ const (
 	dpadDown     = ebiten.StandardGamepadButtonLeftBottom
 )
 
+// gamepadIDs returns the connected gamepads, or none while the window
+// isn't focused. Ebiten's gamepad backend reads raw OS joystick state,
+// which (unlike keyboard/mouse) isn't scoped to window focus on its own —
+// without this, held controller input would keep driving the launcher
+// even while some other window is focused.
 func gamepadIDs() []ebiten.GamepadID {
+	if !ebiten.IsFocused() {
+		return nil
+	}
 	return ebiten.AppendGamepadIDs(nil)
 }
 

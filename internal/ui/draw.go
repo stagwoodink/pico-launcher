@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
 const (
@@ -94,21 +95,64 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 	}
 }
 
-// drawPlaceholderCart draws a white hairline cart outline with the cart's
-// title centered inside, for carts that have no cover image.
+// drawPlaceholderCart draws a hairline outline shaped like an actual PICO-8
+// cartridge label — rounded top corners, a chamfered bottom-right corner —
+// with an art box and a label box (holding the cart's title) inside, for
+// carts that have no cover image of their own.
 func (g *Game) drawPlaceholderCart(screen *ebiten.Image, x, y, w, h float64, alpha float32, name string) {
-	const border = 2.0
 	c := color.RGBA{255, 255, 255, uint8(255 * alpha)}
-	fillRect(screen, x, y, w, border, c)
-	fillRect(screen, x, y+h-border, w, border, c)
-	fillRect(screen, x, y, border, h, c)
-	fillRect(screen, x+w-border, y, border, h, c)
+	strokeWidth := float32(w) * 0.012
+	if strokeWidth < 1 {
+		strokeWidth = 1
+	}
+	strokeOpts := &vector.StrokeOptions{Width: strokeWidth}
+	drawOpts := &vector.DrawPathOptions{AntiAlias: true}
+	drawOpts.ColorScale.ScaleWithColor(c)
+
+	fx, fy, fw, fh := float32(x), float32(y), float32(w), float32(h)
+	radius := fw * 0.10
+	chamfer := fw * 0.18
+
+	var outline vector.Path
+	outline.MoveTo(fx+radius, fy)
+	outline.LineTo(fx+fw-radius, fy)
+	outline.ArcTo(fx+fw, fy, fx+fw, fy+radius, radius)
+	outline.LineTo(fx+fw, fy+fh-chamfer)
+	outline.LineTo(fx+fw-chamfer, fy+fh)
+	outline.LineTo(fx, fy+fh)
+	outline.LineTo(fx, fy+radius)
+	outline.ArcTo(fx, fy, fx+radius, fy, radius)
+	outline.Close()
+	vector.StrokePath(screen, &outline, strokeOpts, drawOpts)
+
+	// Art box: where a cover screenshot would sit.
+	sideMargin := w * 0.09
+	artX, artY := x+sideMargin, y+h*0.06
+	artSize := w - sideMargin*2
+	var artBox vector.Path
+	artBox.MoveTo(float32(artX), float32(artY))
+	artBox.LineTo(float32(artX+artSize), float32(artY))
+	artBox.LineTo(float32(artX+artSize), float32(artY+artSize))
+	artBox.LineTo(float32(artX), float32(artY+artSize))
+	artBox.Close()
+	vector.StrokePath(screen, &artBox, strokeOpts, drawOpts)
+
+	// Label box: title area below the art box.
+	labelY := artY + artSize + h*0.04
+	labelH := (y + h*0.92) - labelY
+	var labelBox vector.Path
+	labelBox.MoveTo(float32(artX), float32(labelY))
+	labelBox.LineTo(float32(artX+artSize), float32(labelY))
+	labelBox.LineTo(float32(artX+artSize), float32(labelY+labelH))
+	labelBox.LineTo(float32(artX), float32(labelY+labelH))
+	labelBox.Close()
+	vector.StrokePath(screen, &labelBox, strokeOpts, drawOpts)
 
 	if g.font == nil {
 		return
 	}
-	label := g.font.truncate(strings.ToUpper(name), w-16, listScale)
-	g.font.draw(screen, label, x+w/2, y+h/2, listScale, c, alignCenter)
+	label := g.font.truncate(strings.ToUpper(name), artSize-12, listScale)
+	g.font.draw(screen, label, artX+artSize/2, labelY+labelH/2, listScale, c, alignCenter)
 }
 
 const listPadding = 24
