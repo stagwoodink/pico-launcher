@@ -101,7 +101,7 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 // carts that have no cover image of their own.
 func (g *Game) drawPlaceholderCart(screen *ebiten.Image, x, y, w, h float64, alpha float32, name string) {
 	c := color.RGBA{255, 255, 255, uint8(255 * alpha)}
-	strokeWidth := float32(w) * 0.012
+	strokeWidth := float32(w) * 0.006
 	if strokeWidth < 1 {
 		strokeWidth = 1
 	}
@@ -110,8 +110,8 @@ func (g *Game) drawPlaceholderCart(screen *ebiten.Image, x, y, w, h float64, alp
 	drawOpts.ColorScale.ScaleWithColor(c)
 
 	fx, fy, fw, fh := float32(x), float32(y), float32(w), float32(h)
-	radius := fw * 0.04
-	chamfer := fw * 0.08
+	radius := fw * 0.02
+	chamfer := fw * 0.04
 
 	var outline vector.Path
 	outline.MoveTo(fx+radius, fy)
