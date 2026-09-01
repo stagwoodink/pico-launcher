@@ -48,3 +48,7 @@ PICO-8 path and carts folder. Delete it to re-run detection from scratch.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+`internal/ui/assets/pico8_font.png` is Lexaloffle's official PICO-8 font
+glyph sheet, used under its CC-0 license for visual consistency with PICO-8
+itself.

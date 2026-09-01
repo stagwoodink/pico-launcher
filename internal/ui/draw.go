@@ -7,7 +7,11 @@ import (
 	"os"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
+)
+
+const (
+	messageScale = 4
+	listScale    = 2
 )
 
 var (
@@ -33,16 +37,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 func (g *Game) drawMessage(screen *ebiten.Image, msg string) {
-	if g.face == nil {
+	if g.font == nil {
 		return
 	}
 	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
-	opt := &text.DrawOptions{}
-	opt.GeoM.Translate(float64(w)/2, float64(h)/2)
-	opt.PrimaryAlign = text.AlignCenter
-	opt.SecondaryAlign = text.AlignCenter
-	opt.ColorScale.ScaleWithColor(color.White)
-	text.Draw(screen, msg, g.face, opt)
+	g.font.draw(screen, msg, float64(w)/2, float64(h)/2, messageScale, white, alignCenter)
 }
 
 func (g *Game) drawBrowsing(screen *ebiten.Image) {
@@ -67,12 +66,12 @@ const listPadding = 24
 // listWidth sizes the list panel to fit its longest title, capped so the
 // carasel always keeps most of the screen.
 func (g *Game) listWidth(screenW int) int {
-	if g.face == nil || len(g.list) == 0 {
+	if g.font == nil || len(g.list) == 0 {
 		return 0
 	}
 	maxW := 0.0
 	for _, c := range g.list {
-		w, _ := text.Measure(c.Name, g.face, 0)
+		w := g.font.width(c.Name, listScale)
 		if w > maxW {
 			maxW = w
 		}
@@ -117,7 +116,7 @@ func (g *Game) drawCarasel(screen *ebiten.Image, x, areaW, areaH int) {
 // drawList renders the plain-cart title list centered in [x, x+areaW), with
 // the current selection always in the middle row.
 func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
-	if g.face == nil {
+	if g.font == nil {
 		return
 	}
 	const radius = 4 // rows shown above/below the selection
@@ -143,12 +142,7 @@ func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
 			col = textOnBar
 		}
 
-		opt := &text.DrawOptions{}
-		opt.GeoM.Translate(textX, rowY)
-		opt.PrimaryAlign = text.AlignStart
-		opt.SecondaryAlign = text.AlignCenter
-		opt.ColorScale.ScaleWithColor(col)
-		text.Draw(screen, cart.Name, g.face, opt)
+		g.font.draw(screen, cart.Name, textX, rowY, listScale, col, alignStart)
 	}
 }
 

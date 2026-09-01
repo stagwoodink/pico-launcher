@@ -2,13 +2,10 @@
 package ui
 
 import (
-	"bytes"
 	"os"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
-	"golang.org/x/image/font/gofont/goregular"
 
 	"github.com/stagwoodink/pico-launcher/internal/carts"
 	"github.com/stagwoodink/pico-launcher/internal/config"
@@ -57,14 +54,13 @@ type Game struct {
 
 	images map[string]*ebiten.Image
 
-	face *text.GoTextFace
+	font *bitmapFont
 }
 
 func New(cfg config.Config) *Game {
 	g := &Game{cfg: cfg, images: map[string]*ebiten.Image{}}
-	src, err := text.NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
-	if err == nil {
-		g.face = &text.GoTextFace{Source: src, Size: 20}
+	if f, err := loadBitmapFont(); err == nil {
+		g.font = f
 	}
 	g.bootstrap()
 	return g
