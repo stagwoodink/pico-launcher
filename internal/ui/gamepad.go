@@ -47,3 +47,18 @@ func padHeld(b ebiten.StandardGamepadButton) bool {
 	}
 	return false
 }
+
+// padDuration returns how many ticks b has been held across all connected
+// gamepads (0 if it isn't currently held anywhere).
+func padDuration(b ebiten.StandardGamepadButton) int {
+	max := 0
+	for _, id := range gamepadIDs() {
+		if !ebiten.IsStandardGamepadLayoutAvailable(id) {
+			continue
+		}
+		if d := inpututil.StandardGamepadButtonPressDuration(id, b); d > max {
+			max = d
+		}
+	}
+	return max
+}

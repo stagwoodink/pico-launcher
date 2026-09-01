@@ -3,6 +3,9 @@ package ui
 
 import (
 	"os"
+	"strings"
+	"time"
+	"unicode"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -13,6 +16,10 @@ import (
 	"github.com/stagwoodink/pico-launcher/internal/picker"
 	"github.com/stagwoodink/pico-launcher/internal/pico8"
 )
+
+// typeaheadTimeout is how long to wait after the last keystroke before a
+// new letter starts a fresh search instead of extending the current one.
+const typeaheadTimeout = 700 * time.Millisecond
 
 const (
 	ScreenW = 900
@@ -49,6 +56,9 @@ type Game struct {
 	allCarts []carts.Cart
 	idx      int
 	mode     viewMode
+
+	typeahead   string
+	typeaheadAt time.Time
 
 	images map[string]*ebiten.Image
 
@@ -231,17 +241,23 @@ func (g *Game) updateBrowsing() {
 	}
 
 	if len(g.allCarts) > 0 {
-		prev := inpututil.IsKeyJustPressed(ebiten.KeyLeft) || padJustPressed(dpadLeft) ||
-			inpututil.IsKeyJustPressed(ebiten.KeyUp) || padJustPressed(dpadUp)
-		next := inpututil.IsKeyJustPressed(ebiten.KeyRight) || padJustPressed(dpadRight) ||
-			inpututil.IsKeyJustPressed(ebiten.KeyDown) || padJustPressed(dpadDown)
-		if prev {
+		prevDuration := max(
+			keyDuration(ebiten.KeyLeft), keyDuration(ebiten.KeyUp),
+			padDuration(dpadLeft), padDuration(dpadUp),
+		)
+		nextDuration := max(
+			keyDuration(ebiten.KeyRight), keyDuration(ebiten.KeyDown),
+			padDuration(dpadRight), padDuration(dpadDown),
+		)
+		if repeatFire(prevDuration) {
 			g.idx = wrap(g.idx-1, len(g.allCarts))
 		}
-		if next {
+		if repeatFire(nextDuration) {
 			g.idx = wrap(g.idx+1, len(g.allCarts))
 		}
 	}
+
+	g.updateTypeahead()
 
 	keepOpen := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight) || padHeld(selectButton)
 	trigger := inpututil.IsKeyJustPressed(ebiten.KeySpace) ||
@@ -250,6 +266,36 @@ func (g *Game) updateBrowsing() {
 
 	if trigger {
 		g.launchSelected(keepOpen)
+	}
+}
+
+// updateTypeahead composes typed letters/digits into a search string (a
+// pause longer than typeaheadTimeout starts a fresh one) and jumps the
+// selection to the first cart whose title starts with it.
+func (g *Game) updateTypeahead() {
+	var typed []rune
+	for _, r := range ebiten.AppendInputChars(nil) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			typed = append(typed, r)
+		}
+	}
+	if len(typed) == 0 {
+		return
+	}
+
+	now := time.Now()
+	if now.Sub(g.typeaheadAt) > typeaheadTimeout {
+		g.typeahead = ""
+	}
+	g.typeahead += string(typed)
+	g.typeaheadAt = now
+
+	needle := strings.ToUpper(g.typeahead)
+	for i, c := range g.allCarts {
+		if strings.HasPrefix(strings.ToUpper(c.Name), needle) {
+			g.idx = i
+			return
+		}
 	}
 }
 
