@@ -52,13 +52,36 @@ func (g *Game) drawBrowsing(screen *ebiten.Image) {
 
 	switch {
 	case showCarasel && showList:
-		g.drawCarasel(screen, 0, w/2, h)
-		g.drawList(screen, w/2, w/2, h)
+		listW := g.listWidth(w)
+		g.drawList(screen, 0, listW, h)
+		g.drawCarasel(screen, listW, w-listW, h)
 	case showCarasel:
 		g.drawCarasel(screen, 0, w, h)
 	case showList:
 		g.drawList(screen, 0, w, h)
 	}
+}
+
+const listPadding = 24
+
+// listWidth sizes the list panel to fit its longest title, capped so the
+// carasel always keeps most of the screen.
+func (g *Game) listWidth(screenW int) int {
+	if g.face == nil || len(g.list) == 0 {
+		return 0
+	}
+	maxW := 0.0
+	for _, c := range g.list {
+		w, _ := text.Measure(c.Name, g.face, 0)
+		if w > maxW {
+			maxW = w
+		}
+	}
+	width := int(maxW) + listPadding*2
+	if cap := screenW * 45 / 100; width > cap {
+		width = cap
+	}
+	return width
 }
 
 // drawCarasel renders the cover-art carasel centered in [x, x+areaW).
@@ -100,7 +123,7 @@ func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
 	const radius = 4 // rows shown above/below the selection
 	rows := radius*2 + 1
 	rowH := float64(areaH) / float64(rows)
-	cx := float64(x) + float64(areaW)/2
+	textX := float64(x) + listPadding
 
 	barColor := dimBar
 	textOnBar := white
@@ -121,8 +144,8 @@ func (g *Game) drawList(screen *ebiten.Image, x, areaW, areaH int) {
 		}
 
 		opt := &text.DrawOptions{}
-		opt.GeoM.Translate(cx, rowY)
-		opt.PrimaryAlign = text.AlignCenter
+		opt.GeoM.Translate(textX, rowY)
+		opt.PrimaryAlign = text.AlignStart
 		opt.SecondaryAlign = text.AlignCenter
 		opt.ColorScale.ScaleWithColor(col)
 		text.Draw(screen, cart.Name, g.face, opt)
