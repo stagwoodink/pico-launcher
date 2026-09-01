@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	bg           = color.RGBA{16, 16, 20, 255}
-	placeholder  = color.RGBA{40, 40, 48, 255}
-	highlight    = color.RGBA{255, 204, 0, 255}
-	dim          = color.RGBA{90, 90, 100, 255}
+	bg          = color.RGBA{16, 16, 20, 255}
+	placeholder = color.RGBA{40, 40, 48, 255}
+	highlight   = color.RGBA{255, 204, 0, 255}
+	dim         = color.RGBA{90, 90, 100, 255}
 )
 
 func (g *Game) Draw(screen *ebiten.Image) {

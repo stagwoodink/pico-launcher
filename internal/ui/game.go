@@ -43,14 +43,15 @@ const (
 type Game struct {
 	cfg config.Config
 
-	state     state
-	pickerErr chan string // resolved path or "" on cancel/failure
+	state       state
+	returnState state       // state to restore to if the user cancels a picker
+	pickerErr   chan string // resolved path or "" on cancel/failure
 
-	carasel     []carts.Cart
-	list        []carts.Cart
-	caraselIdx  int
-	listIdx     int
-	lastPanel   panel
+	carasel    []carts.Cart
+	list       []carts.Cart
+	caraselIdx int
+	listIdx    int
+	lastPanel  panel
 
 	images map[string]*ebiten.Image
 
@@ -125,6 +126,11 @@ func (g *Game) Update() error {
 		}
 	case statePickingPico8:
 		g.pollPicker(func(p string) {
+			if p == "" {
+				// cancelled: leave the existing config untouched.
+				g.state = g.returnState
+				return
+			}
 			resolved := pico8.Resolve(p)
 			if resolved == "" {
 				// couldn't find pico8 in what they picked; ask for the
@@ -143,7 +149,8 @@ func (g *Game) Update() error {
 	case statePickingCarts:
 		g.pollPicker(func(p string) {
 			if p == "" {
-				g.state = stateAwaitCartsTab
+				// cancelled: leave the existing config untouched.
+				g.state = g.returnState
 				return
 			}
 			g.cfg.CartsDir = p
@@ -161,6 +168,7 @@ func (g *Game) Update() error {
 }
 
 func (g *Game) pickPico8() {
+	g.returnState = g.state
 	g.state = statePickingPico8
 	g.pickerErr = make(chan string, 1)
 	go func() {
@@ -185,6 +193,7 @@ func (g *Game) pickPico8File() {
 }
 
 func (g *Game) pickCarts() {
+	g.returnState = g.state
 	g.state = statePickingCarts
 	g.pickerErr = make(chan string, 1)
 	go func() {
