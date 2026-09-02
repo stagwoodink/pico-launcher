@@ -63,24 +63,14 @@ func caraselMetrics(w, h int) (centerH, gap float64) {
 	if byWidth := float64(w) * 0.45; byWidth < centerH {
 		centerH = byWidth
 	}
-	return centerH, centerH * 0.55
+	return centerH, centerH * 0.9
 }
 
-// carasel side-tile falloff: how much smaller/dimmer a tile gets per unit
-// of distance from center, floored so up to visibleRadius tiles out stay
-// legible instead of fading to nothing — the collection should read as
-// deep, not like only 3 covers exist.
-const (
-	visibleRadius   = 3.05
-	caraselMinScale = 0.35
-	caraselMinAlpha = 0.15
-)
-
-// drawCarasel renders the cover-art carasel across the full window: tiles
-// slide continuously with g.pos (not just snapping between integer
-// selections), shrinking and fading the further they are from center.
-// Carts with no cover image get a hairline placeholder tile with their
-// title centered.
+// drawCarasel renders the cover-art carasel across the full window,
+// coverflow-style: tiles slide continuously with g.pos (not just snapping
+// between integer selections), shrinking and fading the further they are
+// from center. Carts with no cover image get a hairline placeholder tile
+// with their title centered.
 func (g *Game) drawCarasel(screen *ebiten.Image) {
 	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
 	cx, cy := float64(w)/2, float64(h)/2
@@ -90,7 +80,8 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 	base := int(math.Round(g.pos))
 	frac := g.pos - float64(base)
 
-	for off := -3; off <= 3; off++ {
+	const visibleRadius = 2.05
+	for off := -2; off <= 2; off++ {
 		dist := float64(off) - frac
 		absDist := math.Abs(dist)
 		if absDist > visibleRadius {
@@ -99,13 +90,13 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 		idx := wrap(base+off, n)
 		cart := g.allCarts[idx]
 
-		scale := 1 - absDist*0.15
-		if scale < caraselMinScale {
-			scale = caraselMinScale
+		scale := 1 - absDist*0.28
+		if scale < 0.1 {
+			scale = 0.1
 		}
-		alpha := float32(1 - absDist*0.22)
-		if alpha < caraselMinAlpha {
-			alpha = caraselMinAlpha
+		alpha := float32(1 - absDist*0.45)
+		if alpha < 0 {
+			alpha = 0
 		}
 		tileH := centerH * scale
 		tileX := cx + dist*gap
