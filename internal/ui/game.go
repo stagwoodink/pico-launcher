@@ -12,12 +12,18 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
+	"github.com/stagwoodink/pico-launcher/internal/bbsindex"
+	"github.com/stagwoodink/pico-launcher/internal/bbsmatch"
+	"github.com/stagwoodink/pico-launcher/internal/bbsreplace"
 	"github.com/stagwoodink/pico-launcher/internal/carts"
 	"github.com/stagwoodink/pico-launcher/internal/config"
 	"github.com/stagwoodink/pico-launcher/internal/launcher"
 	"github.com/stagwoodink/pico-launcher/internal/picker"
 	"github.com/stagwoodink/pico-launcher/internal/pico8"
 )
+
+// bbsCandidateCount is how many options the [Tab] resolution picker offers.
+const bbsCandidateCount = 5
 
 // typeaheadTimeout is how long to wait after the last keystroke before a
 // new letter starts a fresh search instead of extending the current one.
@@ -37,6 +43,7 @@ const (
 	statePickingCarts
 	stateNoCarts
 	stateBrowsing
+	stateResolvingBBS // "[Tab]" candidate picker for a badged cart
 )
 
 // viewMode is the whole-window display: every cart is always in play, only
@@ -81,6 +88,34 @@ type Game struct {
 	images map[string]*ebiten.Image
 
 	font *bitmapFont
+
+	// bbsIndex is the scraped BBS cart index, loaded once in the background
+	// after carts load. bbsBadge marks carts whose local .p8 has no
+	// confident match ("?" tile badge, resolved via [Tab] on that cart).
+	bbsIndex    []bbsindex.BBSCart
+	bbsBadge    map[string]bool
+	bbsResultCh chan bbsEnrichResult
+
+	// Set while stateResolvingBBS is active.
+	resolveCart    string
+	resolveOptions []bbsindex.BBSCart
+	resolveSel     int
+	resolveCh      chan bbsResolveResult
+}
+
+// bbsEnrichResult is what the background enrichment pass hands back to the
+// main (Ebiten) goroutine to apply — the scan/replace work itself happens
+// off that goroutine, but every Game field mutation happens on it.
+type bbsEnrichResult struct {
+	index    []bbsindex.BBSCart
+	replaced map[string]carts.Cart
+	badges   map[string]bool
+}
+
+type bbsResolveResult struct {
+	name string
+	cart carts.Cart
+	ok   bool
 }
 
 func New(cfg config.Config) *Game {
@@ -134,6 +169,69 @@ func (g *Game) loadCarts() {
 	g.pos, g.target, g.vel = 0, 0, 0
 	g.dragging = false
 	g.state = stateBrowsing
+	g.startBBSEnrichment()
+}
+
+// startBBSEnrichment fetches the BBS index and, for every local .p8-only
+// cart (no cover art of its own), matches it and either replaces it
+// silently (confident match) or flags it with a "?" badge (no dialog —
+// this app never surfaces error/prompt UI, see handoff). All of it runs off
+// the Ebiten goroutine; only the finished result is applied to Game state,
+// via bbsResultCh polled from updateBrowsing.
+func (g *Game) startBBSEnrichment() {
+	snapshot := append([]carts.Cart(nil), g.baseCarts...)
+	ch := make(chan bbsEnrichResult, 1)
+	g.bbsResultCh = ch
+	go func() {
+		index, err := bbsindex.Fetch()
+		if err != nil || len(index) == 0 {
+			ch <- bbsEnrichResult{}
+			return
+		}
+		replaced := map[string]carts.Cart{}
+		badges := map[string]bool{}
+		for _, c := range snapshot {
+			if c.Image != "" || !strings.HasSuffix(strings.ToLower(c.Path), ".p8") {
+				continue
+			}
+			title, author := bbsmatch.ParseP8Meta(c.Path)
+			best, _, ok := bbsmatch.Match(title, author, index)
+			if !ok {
+				badges[c.Name] = true
+				continue
+			}
+			newPath, err := bbsreplace.Replace(c.Path, best.PNGURL)
+			if err != nil {
+				badges[c.Name] = true
+				continue
+			}
+			replaced[c.Name] = carts.Cart{Name: c.Name, Path: newPath, Image: newPath}
+		}
+		ch <- bbsEnrichResult{index: index, replaced: replaced, badges: badges}
+	}()
+}
+
+// pollBBSEnrichment applies a finished background enrichment pass, if one
+// has landed: swaps in any auto-replaced carts and records "?" badges.
+func (g *Game) pollBBSEnrichment() {
+	if g.bbsResultCh == nil {
+		return
+	}
+	select {
+	case res := <-g.bbsResultCh:
+		g.bbsResultCh = nil
+		g.bbsIndex = res.index
+		g.bbsBadge = res.badges
+		if len(res.replaced) > 0 {
+			for i, c := range g.baseCarts {
+				if nc, ok := res.replaced[c.Name]; ok {
+					g.baseCarts[i] = nc
+				}
+			}
+			g.rebuildOrder()
+		}
+	default:
+	}
 }
 
 // rebuildOrder regenerates allCarts from baseCarts plus the configured
@@ -258,6 +356,8 @@ func (g *Game) Update() error {
 		}
 	case stateBrowsing:
 		g.updateBrowsing()
+	case stateResolvingBBS:
+		g.updateResolvingBBS()
 	}
 	return nil
 }
@@ -309,6 +409,8 @@ func (g *Game) pollPicker(onResult func(string)) {
 }
 
 func (g *Game) updateBrowsing() {
+	g.pollBBSEnrichment()
+
 	if inpututil.IsKeyJustPressed(ebiten.KeyBackquote) {
 		if g.mode == modeCarasel {
 			g.mode = modeList
@@ -320,6 +422,12 @@ func (g *Game) updateBrowsing() {
 
 	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
 		shift := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
+		if !shift {
+			if cart, ok := g.selectedCart(); ok && g.bbsBadge[cart.Name] {
+				g.openBBSResolve(cart)
+				return
+			}
+		}
 		if shift {
 			g.pickPico8()
 		} else {
@@ -470,6 +578,86 @@ func (g *Game) selfHeal(cart carts.Cart) bool {
 		g.cfg.Save()
 	}
 	return healed
+}
+
+// openBBSResolve enters the on-demand candidate picker for a badged cart.
+func (g *Game) openBBSResolve(cart carts.Cart) {
+	title, author := bbsmatch.ParseP8Meta(cart.Path)
+	opts := bbsmatch.Candidates(title, author, g.bbsIndex, bbsCandidateCount)
+	if len(opts) == 0 {
+		return
+	}
+	g.resolveCart = cart.Name
+	g.resolveOptions = opts
+	g.resolveSel = 0
+	g.returnState = stateBrowsing
+	g.state = stateResolvingBBS
+}
+
+func (g *Game) updateResolvingBBS() {
+	if g.resolveCh != nil {
+		select {
+		case res := <-g.resolveCh:
+			g.resolveCh = nil
+			if res.ok {
+				delete(g.bbsBadge, res.name)
+				for i, c := range g.baseCarts {
+					if c.Name == res.name {
+						g.baseCarts[i] = res.cart
+					}
+				}
+				g.rebuildOrder()
+			}
+			g.state = g.returnState
+		default:
+		}
+		return
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyUp) {
+		g.resolveSel = wrap(g.resolveSel-1, len(g.resolveOptions))
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDown) {
+		g.resolveSel = wrap(g.resolveSel+1, len(g.resolveOptions))
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) || inpututil.IsKeyJustPressed(ebiten.KeyBackspace) {
+		// keep current: just drop the badge, no replacement.
+		delete(g.bbsBadge, g.resolveCart)
+		g.state = g.returnState
+		return
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+		g.confirmBBSResolve()
+	}
+}
+
+// confirmBBSResolve downloads and swaps in the picked candidate off the
+// Ebiten goroutine, same pattern as the file pickers (pollPicker).
+func (g *Game) confirmBBSResolve() {
+	name := g.resolveCart
+	picked := g.resolveOptions[g.resolveSel]
+
+	var cartPath string
+	for _, c := range g.baseCarts {
+		if c.Name == name {
+			cartPath = c.Path
+		}
+	}
+	if cartPath == "" {
+		g.state = g.returnState
+		return
+	}
+
+	ch := make(chan bbsResolveResult, 1)
+	g.resolveCh = ch
+	go func() {
+		newPath, err := bbsreplace.Replace(cartPath, picked.PNGURL)
+		if err != nil {
+			ch <- bbsResolveResult{name: name, ok: false}
+			return
+		}
+		ch <- bbsResolveResult{name: name, ok: true, cart: carts.Cart{Name: name, Path: newPath, Image: newPath}}
+	}()
 }
 
 func wrap(i, n int) int {

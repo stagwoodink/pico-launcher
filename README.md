@@ -39,6 +39,19 @@ First run: it tries to find your PICO-8 install and carts folder on its own
 prompt `hit [tab]` and open a native folder picker — a one-time thing, saved
 to config after.
 
+### BBS cart art
+
+A `.p8` with no cover art gets checked in the background against a daily
+scraped index of the PICO-8 BBS (`cmd/bbs-scraper`, `carts.json`, served via
+jsDelivr — see `internal/bbsindex`). A confident title/author match
+downloads the official `.p8.png` and swaps it in silently; the original
+`.p8` is kept in a `.pico-launcher-backups/` folder alongside your carts, not
+deleted. A weak match gets a `?` badge instead of guessing — focus that cart
+and press `[Tab]` to pick from the closest candidates or keep it as-is
+(`[Esc]`/`[Backspace]`). `[Tab]` otherwise reopens the carts-folder picker,
+same as before — it only does BBS resolution when the focused cart has a
+pending `?`.
+
 ## Build
 
 Requires Go 1.22+ and the native build deps for
