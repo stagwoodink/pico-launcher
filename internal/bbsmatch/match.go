@@ -17,13 +17,23 @@ import (
 // Below it, callers should show the "?" badge instead of auto-replacing.
 const Threshold = 0.82
 
-// ParseP8Meta reads a .p8 file's first two Lua comment lines, which by
-// PICO-8 convention hold the cart's title and byline, e.g.:
+// maxHeaderScanLines bounds how far ParseP8Meta looks for "__lua__" before
+// giving up, so a non-standard or huge file can't make it scan forever.
+const maxHeaderScanLines = 20
+
+// ParseP8Meta reads a .p8 file's title/byline. A real PICO-8 cart starts
+// with two fixed header lines ("pico-8 cartridge // ...", "version N")
+// before the "__lua__" section marker; the title/byline, when the author
+// included them, are the first two Lua comment lines right after that:
 //
-//	-- oswald the lucky rabbit
-//	-- by isaymatato
+//	pico-8 cartridge // http://www.pico-8.com
+//	version 8
+//	__lua__
+//	-- celeste
+//	-- by matt thorson and noel berry
 //
-// Returns "" for either field if the file doesn't start with comments.
+// Returns "" for either field if there's no "__lua__" marker (not a real
+// cart) or no comment lines immediately following it.
 func ParseP8Meta(path string) (title, author string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -32,9 +42,28 @@ func ParseP8Meta(path string) (title, author string) {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
+	foundMarker := false
+	scanned := 0
+	for scanner.Scan() {
+		scanned++
+		if strings.TrimSpace(scanner.Text()) == "__lua__" {
+			foundMarker = true
+			break
+		}
+		if scanned >= maxHeaderScanLines {
+			break
+		}
+	}
+	if !foundMarker {
+		return "", ""
+	}
+
 	lines := make([]string, 0, 2)
 	for len(lines) < 2 && scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue // a blank line between __lua__ and the comments is common
+		}
 		if !strings.HasPrefix(line, "--") {
 			break
 		}
