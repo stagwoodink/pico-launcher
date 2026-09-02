@@ -245,9 +245,13 @@ func unquote(s string) string {
 //	7 author_uid  8 author  9 date2  ...  18 tags  ...
 //
 // The cart's actual downloadable id ("lid") isn't its own field — it's
-// embedded in the thumb filename ("/bbs/thumbs/pico8_<lid>.png"), and that's
-// also what the real cart-file URL is built from (verified against a live
-// BBS post page: /bbs/cposts/<lid[:2]>/<lid>.p8.png).
+// embedded in the thumb filename, and that's also what the real cart-file
+// URL is built from. Two thumb naming eras, both verified against live BBS
+// post pages: modern posts use "/bbs/thumbs/pico8_<slug>.png" (cart URL
+// "/bbs/cposts/<slug[:2]>/<slug>.p8.png"); older posts use the bare post id,
+// "/bbs/thumbs/pico<pid>.png" (cart URL
+// "/bbs/cposts/<pid/10000>/<pid>.p8.png" — no [:2] folder, mirroring the
+// site's own get_cart_url()'s numeric-lid branch).
 func parseRow(row string) (bbsindex.BBSCart, bool) {
 	row = strings.TrimSpace(row)
 	if !strings.HasPrefix(row, "[") || !strings.HasSuffix(row, "]") {
@@ -263,16 +267,10 @@ func parseRow(row string) (bbsindex.BBSCart, bool) {
 	thumb := unquote(fields[3])
 	author := unquote(fields[8])
 
-	lid := lidFromThumb(thumb)
+	lid, pngURL := cartURLFromThumb(thumb)
 	if lid == "" || title == "" {
 		return bbsindex.BBSCart{}, false
 	}
-
-	prefix := lid
-	if len(lid) > 2 {
-		prefix = lid[:2]
-	}
-	pngURL := fmt.Sprintf("%s/bbs/cposts/%s/%s.p8.png", baseURL, prefix, lid)
 
 	return bbsindex.BBSCart{
 		ID:     lid,
@@ -283,14 +281,29 @@ func parseRow(row string) (bbsindex.BBSCart, bool) {
 	}, true
 }
 
-// lidFromThumb extracts "<lid>" from a thumb URL shaped like
-// "/bbs/thumbs/pico8_<lid>.png".
-func lidFromThumb(thumbURL string) string {
+// cartURLFromThumb derives the cart's lid and its actual .p8.png download
+// URL from a thumb URL, handling both thumb-naming eras (see parseRow).
+func cartURLFromThumb(thumbURL string) (lid, pngURL string) {
 	base := thumbURL
 	if i := strings.LastIndex(base, "/"); i != -1 {
 		base = base[i+1:]
 	}
 	base = strings.TrimSuffix(base, ".png")
-	base = strings.TrimPrefix(base, "pico8_")
-	return base
+
+	if slug, ok := strings.CutPrefix(base, "pico8_"); ok {
+		lid = slug
+		prefix := lid
+		if len(lid) > 2 {
+			prefix = lid[:2]
+		}
+		return lid, fmt.Sprintf("%s/bbs/cposts/%s/%s.p8.png", baseURL, prefix, lid)
+	}
+
+	if pid, ok := strings.CutPrefix(base, "pico"); ok {
+		if n, err := strconv.Atoi(pid); err == nil {
+			return pid, fmt.Sprintf("%s/bbs/cposts/%d/%s.p8.png", baseURL, n/10000, pid)
+		}
+	}
+
+	return "", ""
 }
