@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	_ "image/png"
+	"math"
 	"os"
 	"strings"
 
@@ -54,30 +55,51 @@ func (g *Game) drawMessage(screen *ebiten.Image, msg string) {
 // the placeholder tile for carts with no cover image.
 const cartAspect = 160.0 / 205.0
 
-// drawCarasel renders the cover-art carasel across the full window, with
-// the selection centered and neighbors dimmed to the sides. Carts with no
-// cover image get a hairline placeholder tile with their title centered.
-func (g *Game) drawCarasel(screen *ebiten.Image) {
-	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
-	cx, cy := float64(w)/2, float64(h)/2
-	centerH := float64(h) * 0.55
+// caraselMetrics returns the focused tile height and the pixel spacing
+// (gap) between adjacent tile centers, shared by drawing and drag input so
+// a swipe moves exactly as far as it visually should.
+func caraselMetrics(w, h int) (centerH, gap float64) {
+	centerH = float64(h) * 0.55
 	if byWidth := float64(w) * 0.45; byWidth < centerH {
 		centerH = byWidth
 	}
-	gap := centerH * 0.9
+	return centerH, centerH * 0.9
+}
 
-	for off := -1; off <= 1; off++ {
-		idx := wrap(g.idx+off, len(g.allCarts))
+// drawCarasel renders the cover-art carasel across the full window,
+// coverflow-style: tiles slide continuously with g.pos (not just snapping
+// between integer selections), shrinking and fading the further they are
+// from center. Carts with no cover image get a hairline placeholder tile
+// with their title centered.
+func (g *Game) drawCarasel(screen *ebiten.Image) {
+	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
+	cx, cy := float64(w)/2, float64(h)/2
+	centerH, gap := caraselMetrics(w, h)
+	n := len(g.allCarts)
+
+	base := int(math.Round(g.pos))
+	frac := g.pos - float64(base)
+
+	const visibleRadius = 2.05
+	for off := -2; off <= 2; off++ {
+		dist := float64(off) - frac
+		absDist := math.Abs(dist)
+		if absDist > visibleRadius {
+			continue
+		}
+		idx := wrap(base+off, n)
 		cart := g.allCarts[idx]
 
-		scale := 1.0
-		alpha := float32(1.0)
-		if off != 0 {
-			scale = 0.7
-			alpha = 0.35
+		scale := 1 - absDist*0.28
+		if scale < 0.1 {
+			scale = 0.1
+		}
+		alpha := float32(1 - absDist*0.45)
+		if alpha < 0 {
+			alpha = 0
 		}
 		tileH := centerH * scale
-		tileX := cx + float64(off)*gap
+		tileX := cx + dist*gap
 
 		if img := g.thumbnail(cart.Image); img != nil {
 			iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
@@ -157,29 +179,41 @@ func (g *Game) drawPlaceholderCart(screen *ebiten.Image, x, y, w, h float64, alp
 
 const listPadding = 24
 
+// listRowHeight is fixed (not screen-relative) so line spacing looks the
+// same at any window size; how many rows fit adapts to the window instead.
+func listRowHeight() float64 {
+	return float64(glyphCellH*listScale) * 3.5
+}
+
 // drawList renders every cart's title as a left-aligned row spanning the
-// full window, with the current selection always in the middle row.
+// full window. The selection highlight bar stays fixed at center; rows
+// slide continuously past it with g.pos, and whichever row is currently
+// under the bar gets its text inverted.
 func (g *Game) drawList(screen *ebiten.Image) {
 	if g.font == nil {
 		return
 	}
 	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
+	n := len(g.allCarts)
 
-	// Fixed row height so line spacing looks the same at any window size;
-	// how many rows fit (above/below the selection) adapts to h instead.
-	rowH := float64(glyphCellH*listScale) * 3.5
-	radius := int(float64(h) / 2 / rowH)
+	rowH := listRowHeight()
+	barY := float64(h) / 2
+	radius := int(float64(h)/2/rowH) + 1
 	textX := float64(listPadding)
 	maxTextW := float64(w) - listPadding*2
 
+	base := int(math.Round(g.pos))
+	frac := g.pos - float64(base)
+
+	fillRect(screen, 0, barY-rowH/2, float64(w), rowH, white)
+
 	for off := -radius; off <= radius; off++ {
-		idx := wrap(g.idx+off, len(g.allCarts))
+		idx := wrap(base+off, n)
 		cart := g.allCarts[idx]
-		rowY := float64(h)/2 + float64(off)*rowH
+		rowY := barY + (float64(off)-frac)*rowH
 
 		col := white
-		if off == 0 {
-			fillRect(screen, 0, rowY-rowH/2, float64(w), rowH, white)
+		if math.Abs(rowY-barY) < rowH/2 {
 			col = black
 		}
 

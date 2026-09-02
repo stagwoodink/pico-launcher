@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -54,8 +55,18 @@ type Game struct {
 	pickerErr   chan string // resolved path or "" on cancel/failure
 
 	allCarts []carts.Cart
-	idx      int
 	mode     viewMode
+
+	// pos is the animated (unwrapped) scroll position rendering follows;
+	// target is where it's easing/coasting toward. Both stay unwrapped so
+	// wrap-around and shortest-path jumps are plain float math — see
+	// scroll.go. The logical selection is always wrap(round(target), n).
+	pos, target, vel float64
+	dragging         bool
+	dragIsTouch      bool
+	dragTouchID      ebiten.TouchID
+	dragAnchor       float64 // pointer coord (px) when the drag started
+	dragAnchorPos    float64 // pos value when the drag started
 
 	typeahead   string
 	typeaheadAt time.Time
@@ -112,7 +123,8 @@ func (g *Game) loadCarts() {
 		return
 	}
 	g.allCarts = all
-	g.idx = 0
+	g.pos, g.target, g.vel = 0, 0, 0
+	g.dragging = false
 	g.state = stateBrowsing
 }
 
@@ -240,7 +252,7 @@ func (g *Game) updateBrowsing() {
 		return
 	}
 
-	if len(g.allCarts) > 0 {
+	if len(g.allCarts) > 0 && !g.dragging {
 		prevDuration := max(
 			keyDuration(ebiten.KeyLeft), keyDuration(ebiten.KeyUp),
 			padDuration(dpadLeft), padDuration(dpadUp),
@@ -250,14 +262,15 @@ func (g *Game) updateBrowsing() {
 			padDuration(dpadRight), padDuration(dpadDown),
 		)
 		if repeatFire(prevDuration) {
-			g.idx = wrap(g.idx-1, len(g.allCarts))
+			g.target--
 		}
 		if repeatFire(nextDuration) {
-			g.idx = wrap(g.idx+1, len(g.allCarts))
+			g.target++
 		}
 	}
 
 	g.updateTypeahead()
+	g.updateScroll()
 
 	keepOpen := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight) || padHeld(selectButton)
 	trigger := inpututil.IsKeyJustPressed(ebiten.KeySpace) ||
@@ -293,17 +306,26 @@ func (g *Game) updateTypeahead() {
 	needle := strings.ToUpper(g.typeahead)
 	for i, c := range g.allCarts {
 		if strings.HasPrefix(strings.ToUpper(c.Name), needle) {
-			g.idx = i
+			g.target += shortestDelta(g.currentIndex(), i, len(g.allCarts))
 			return
 		}
 	}
+}
+
+// currentIndex is the logical selection: wherever target is heading, not
+// necessarily where the animation has visually settled yet.
+func (g *Game) currentIndex() int {
+	if len(g.allCarts) == 0 {
+		return 0
+	}
+	return wrap(int(math.Round(g.target)), len(g.allCarts))
 }
 
 func (g *Game) selectedCart() (carts.Cart, bool) {
 	if len(g.allCarts) == 0 {
 		return carts.Cart{}, false
 	}
-	return g.allCarts[g.idx], true
+	return g.allCarts[g.currentIndex()], true
 }
 
 // launchSelected launches with silent self-healing: if it fails, it
@@ -349,9 +371,6 @@ func (g *Game) selfHeal(cart carts.Cart) bool {
 	if _, err := os.Stat(cart.Path); err != nil {
 		if all := carts.Scan(g.cfg.CartsDir); all != nil {
 			g.allCarts = all
-			if g.idx >= len(g.allCarts) {
-				g.idx = 0
-			}
 			healed = true
 		}
 	}
