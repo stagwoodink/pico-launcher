@@ -17,12 +17,12 @@ jobs:
           go-version: "1.22"
       - run: go run ./cmd/bbs-scraper -out carts.json
       - run: |
-          if git diff --quiet -- carts.json; then
+          git add carts.json
+          if git diff --cached --quiet -- carts.json; then
             echo "carts.json unchanged, nothing to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add carts.json
           git commit -m "chore(bbs): refresh carts.json"
           git push
