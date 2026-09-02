@@ -8,9 +8,46 @@ import (
 	"path/filepath"
 )
 
+// maxRecents caps how many recently-launched carts are remembered and
+// pinned to the front of the list.
+const maxRecents = 3
+
 type Config struct {
 	Pico8Path string `json:"pico8_path"`
 	CartsDir  string `json:"carts_dir"`
+
+	// RecentNames is cart names, most-recently-launched first, capped at
+	// maxRecents. FavoriteNames is unordered; display order is decided by
+	// the UI layer, not stored here.
+	RecentNames   []string `json:"recent_names,omitempty"`
+	FavoriteNames []string `json:"favorite_names,omitempty"`
+}
+
+// TouchRecent moves name to the front of RecentNames (adding it if new)
+// and trims to maxRecents.
+func (c *Config) TouchRecent(name string) {
+	out := []string{name}
+	for _, n := range c.RecentNames {
+		if n != name {
+			out = append(out, n)
+		}
+	}
+	if len(out) > maxRecents {
+		out = out[:maxRecents]
+	}
+	c.RecentNames = out
+}
+
+// ToggleFavorite adds name to FavoriteNames if absent, removes it if
+// present.
+func (c *Config) ToggleFavorite(name string) {
+	for i, n := range c.FavoriteNames {
+		if n == name {
+			c.FavoriteNames = append(c.FavoriteNames[:i], c.FavoriteNames[i+1:]...)
+			return
+		}
+	}
+	c.FavoriteNames = append(c.FavoriteNames, name)
 }
 
 func path() (string, error) {

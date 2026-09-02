@@ -24,10 +24,15 @@ Every cart is always in play — how it's shown just depends on the view:
 - **Type a letter**: jumps to the first cart whose title starts with it.
   Keep typing within ~0.7s to search a longer prefix; pause and the next
   letter starts a new search.
-- **Launch and close launcher**: `Space`/`Enter`, or `A`/`Start` on a
-  controller.
-- **Launch and keep launcher open**: hold `Shift` while launching, or use
-  `Select`/`Back` on a controller.
+- **Launch**: `Enter`, or `A`/`Start`/`Select` on a controller. The
+  launcher stays open.
+- **`Space`**: favorite/unfavorite the current cart (marked `*`).
+
+Up to 3 recently-launched carts are pinned at the very front (newest
+first, marked `~`), followed by your favorites (alphabetical, marked
+`*`) — a cart in both stays marked `*` but only gets pinned once, by
+whichever section it's currently in. Every cart still also appears in
+its normal alphabetical spot.
 
 First run: it tries to find your PICO-8 install and carts folder on its own
 (common install paths, then any folder with 5+ carts). If it can't, it'll
@@ -52,7 +57,8 @@ the GitHub Release.
 
 A single JSON file at your OS's standard config dir
 (`~/.config/pico-launcher/config.json` on Linux, etc.) stores the resolved
-PICO-8 path and carts folder. Delete it to re-run detection from scratch.
+PICO-8 path, carts folder, recents, and favorites. Delete it to reset
+everything, or hand-edit it if you just want to clear recents/favorites.
 
 ## License
 

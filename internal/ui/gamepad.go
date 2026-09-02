@@ -9,7 +9,7 @@ import (
 // this via the browser Standard Gamepad layout ebiten follows):
 //   - aButton: bottom face button (A / Cross) — primary "launch" button
 //   - startButton: center-right (Start / Options)
-//   - selectButton: center-left (Select / Back / Share) — "keep open" launch
+//   - selectButton: center-left (Select / Back / Share) — also launches
 const (
 	aButton      = ebiten.StandardGamepadButtonRightBottom
 	startButton  = ebiten.StandardGamepadButtonCenterRight
@@ -38,18 +38,6 @@ func padJustPressed(b ebiten.StandardGamepadButton) bool {
 			continue
 		}
 		if inpututil.IsStandardGamepadButtonJustPressed(id, b) {
-			return true
-		}
-	}
-	return false
-}
-
-func padHeld(b ebiten.StandardGamepadButton) bool {
-	for _, id := range gamepadIDs() {
-		if !ebiten.IsStandardGamepadLayoutAvailable(id) {
-			continue
-		}
-		if ebiten.IsStandardGamepadButtonPressed(id, b) {
 			return true
 		}
 	}

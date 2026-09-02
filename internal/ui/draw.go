@@ -109,12 +109,34 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 			opt.GeoM.Translate(tileX-float64(iw)*s/2, cy-float64(ih)*s/2)
 			opt.ColorScale.ScaleAlpha(alpha)
 			screen.DrawImage(img, opt)
-			continue
+		} else {
+			// A touch smaller than a real cover so the outline doesn't
+			// read as visibly bigger than the actual carts next to it.
+			const placeholderInset = 0.94
+			pw, ph := tileH*cartAspect*placeholderInset, tileH*placeholderInset
+			g.drawPlaceholderCart(screen, tileX-pw/2, cy-ph/2, pw, ph, alpha, cart.Name)
 		}
 
-		tileW := tileH * cartAspect
-		g.drawPlaceholderCart(screen, tileX-tileW/2, cy-tileH/2, tileW, tileH, alpha, cart.Name)
+		if marks := g.marksFor(cart.Name); marks != "" {
+			g.font.draw(screen, marks, tileX, cy+tileH/2+float64(glyphCellH), 1, color.RGBA{255, 255, 255, uint8(255 * alpha)}, alignCenter)
+		}
 	}
+}
+
+// marksFor returns the small under-tile indicator for a cart: "~" if it's
+// currently one of the pinned recents, "*" if it's favorited, both, or "".
+func (g *Game) marksFor(name string) string {
+	if g.font == nil {
+		return ""
+	}
+	marks := ""
+	if g.recentSet[name] {
+		marks += "~"
+	}
+	if g.favoriteSet[name] {
+		marks += "*"
+	}
+	return marks
 }
 
 // drawPlaceholderCart draws a hairline outline shaped like an actual PICO-8
@@ -132,8 +154,8 @@ func (g *Game) drawPlaceholderCart(screen *ebiten.Image, x, y, w, h float64, alp
 	drawOpts.ColorScale.ScaleWithColor(c)
 
 	fx, fy, fw, fh := float32(x), float32(y), float32(w), float32(h)
-	radius := fw * 0.02
-	chamfer := fw * 0.04
+	radius := fw * 0.014
+	chamfer := fw * 0.06
 
 	var outline vector.Path
 	outline.MoveTo(fx+radius, fy)
@@ -141,7 +163,8 @@ func (g *Game) drawPlaceholderCart(screen *ebiten.Image, x, y, w, h float64, alp
 	outline.ArcTo(fx+fw, fy, fx+fw, fy+radius, radius)
 	outline.LineTo(fx+fw, fy+fh-chamfer)
 	outline.LineTo(fx+fw-chamfer, fy+fh)
-	outline.LineTo(fx, fy+fh)
+	outline.LineTo(fx+radius, fy+fh)
+	outline.ArcTo(fx, fy+fh, fx, fy+fh-radius, radius)
 	outline.LineTo(fx, fy+radius)
 	outline.ArcTo(fx, fy, fx+radius, fy, radius)
 	outline.Close()
@@ -217,7 +240,11 @@ func (g *Game) drawList(screen *ebiten.Image) {
 			col = black
 		}
 
-		name := g.font.truncate(strings.ToUpper(cart.Name), maxTextW, listScale)
+		label := strings.ToUpper(cart.Name)
+		if marks := g.marksFor(cart.Name); marks != "" {
+			label += " " + marks
+		}
+		name := g.font.truncate(label, maxTextW, listScale)
 		g.font.draw(screen, name, textX, rowY, listScale, col, alignStart)
 	}
 }

@@ -4,6 +4,7 @@ package ui
 import (
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -54,8 +55,14 @@ type Game struct {
 	returnState state       // state to restore to if the user cancels a picker
 	pickerErr   chan string // resolved path or "" on cancel/failure
 
-	allCarts []carts.Cart
-	mode     viewMode
+	// baseCarts is the canonical, deduplicated, alphabetical scan result.
+	// allCarts is what's actually shown: baseCarts with the recent and
+	// favorite carts additionally duplicated up front — see rebuildOrder.
+	baseCarts   []carts.Cart
+	allCarts    []carts.Cart
+	recentSet   map[string]bool // top-maxRecents cart names, for the ~ mark
+	favoriteSet map[string]bool // all favorited cart names, for the * mark
+	mode        viewMode
 
 	// pos is the animated (unwrapped) scroll position rendering follows;
 	// target is where it's easing/coasting toward. Both stay unwrapped so
@@ -122,10 +129,79 @@ func (g *Game) loadCarts() {
 		g.state = stateNoCarts
 		return
 	}
-	g.allCarts = all
+	g.baseCarts = all
+	g.rebuildOrder()
 	g.pos, g.target, g.vel = 0, 0, 0
 	g.dragging = false
 	g.state = stateBrowsing
+}
+
+// rebuildOrder regenerates allCarts from baseCarts plus the configured
+// recents/favorites: up to maxRecents recently-launched carts duplicated
+// at the very front (newest first), then favorited carts duplicated next
+// (alphabetical) — except any favorite currently in that recents block,
+// which is left for the recents duplicate to represent (it still gets the
+// favorite mark, it just isn't duplicated a second time). Both sets are
+// also recorded for the ~/* marks, which apply to every occurrence of a
+// cart, duplicate or original. Selection follows the same cart through
+// the reorder when possible.
+func (g *Game) rebuildOrder() {
+	selected, hadSelection := g.selectedCart()
+
+	byName := make(map[string]carts.Cart, len(g.baseCarts))
+	for _, c := range g.baseCarts {
+		byName[c.Name] = c
+	}
+
+	recentSet := make(map[string]bool, len(g.cfg.RecentNames))
+	var recentBlock []carts.Cart
+	for _, name := range g.cfg.RecentNames {
+		if c, ok := byName[name]; ok {
+			recentBlock = append(recentBlock, c)
+			recentSet[name] = true
+		}
+	}
+
+	favoriteSet := make(map[string]bool, len(g.cfg.FavoriteNames))
+	var favNames []string
+	for _, name := range g.cfg.FavoriteNames {
+		favoriteSet[name] = true
+		if !recentSet[name] {
+			if _, ok := byName[name]; ok {
+				favNames = append(favNames, name)
+			}
+		}
+	}
+	sort.Strings(favNames)
+	favBlock := make([]carts.Cart, len(favNames))
+	for i, name := range favNames {
+		favBlock[i] = byName[name]
+	}
+
+	all := make([]carts.Cart, 0, len(recentBlock)+len(favBlock)+len(g.baseCarts))
+	all = append(all, recentBlock...)
+	all = append(all, favBlock...)
+	all = append(all, g.baseCarts...)
+
+	g.allCarts = all
+	g.recentSet = recentSet
+	g.favoriteSet = favoriteSet
+
+	if hadSelection {
+		g.snapToCart(selected.Name)
+	}
+}
+
+// snapToCart moves the selection to name's first occurrence in allCarts,
+// with no animation — used after a reorder, where the list itself just
+// changed shape rather than the user navigating through it.
+func (g *Game) snapToCart(name string) {
+	for i, c := range g.allCarts {
+		if c.Name == name {
+			g.pos, g.target, g.vel = float64(i), float64(i), 0
+			return
+		}
+	}
 }
 
 // --- ebiten.Game ---
@@ -272,14 +348,28 @@ func (g *Game) updateBrowsing() {
 	g.updateTypeahead()
 	g.updateScroll()
 
-	keepOpen := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight) || padHeld(selectButton)
-	trigger := inpututil.IsKeyJustPressed(ebiten.KeySpace) ||
-		inpututil.IsKeyJustPressed(ebiten.KeyEnter) ||
+	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		g.toggleFavorite()
+	}
+
+	trigger := inpututil.IsKeyJustPressed(ebiten.KeyEnter) ||
 		padJustPressed(aButton) || padJustPressed(startButton) || padJustPressed(selectButton)
 
 	if trigger {
-		g.launchSelected(keepOpen)
+		g.launchSelected()
 	}
+}
+
+// toggleFavorite stars/unstars the current selection and re-derives the
+// display order, since favorite status affects it.
+func (g *Game) toggleFavorite() {
+	cart, ok := g.selectedCart()
+	if !ok {
+		return
+	}
+	g.cfg.ToggleFavorite(cart.Name)
+	g.cfg.Save()
+	g.rebuildOrder()
 }
 
 // updateTypeahead composes typed letters/digits into a search string (a
@@ -330,8 +420,9 @@ func (g *Game) selectedCart() (carts.Cart, bool) {
 
 // launchSelected launches with silent self-healing: if it fails, it
 // re-detects the PICO-8 install and re-checks the cart path before trying
-// once more, without ever surfacing an error to the user.
-func (g *Game) launchSelected(keepOpen bool) {
+// once more, without ever surfacing an error to the user. The launcher
+// itself always stays open.
+func (g *Game) launchSelected() {
 	cart, ok := g.selectedCart()
 	if !ok {
 		return
@@ -352,9 +443,9 @@ func (g *Game) launchSelected(keepOpen bool) {
 	}
 	_ = cmd
 
-	if !keepOpen {
-		os.Exit(0)
-	}
+	g.cfg.TouchRecent(cart.Name)
+	g.cfg.Save()
+	g.rebuildOrder()
 }
 
 // selfHeal re-runs auto-detection for both the PICO-8 install and the carts
@@ -370,7 +461,8 @@ func (g *Game) selfHeal(cart carts.Cart) bool {
 	}
 	if _, err := os.Stat(cart.Path); err != nil {
 		if all := carts.Scan(g.cfg.CartsDir); all != nil {
-			g.allCarts = all
+			g.baseCarts = all
+			g.rebuildOrder()
 			healed = true
 		}
 	}
