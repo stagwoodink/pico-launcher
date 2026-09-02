@@ -653,9 +653,8 @@ func (g *Game) updateResolvingBBS() {
 	}
 	g.updateResolveTypeahead()
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) || inpututil.IsKeyJustPressed(ebiten.KeyBackspace) {
-		// keep current: just drop the badge, no replacement.
-		delete(g.bbsBadge, g.resolveCart)
-		delete(g.bbsUnfound, g.resolveCart)
+		// bail out: no selection was confirmed, so the badge stays exactly
+		// as it was — [Tab] can reopen this picker again later.
 		g.state = g.returnState
 		return
 	}

@@ -87,7 +87,7 @@ func (g *Game) drawResolveBBS(screen *ebiten.Image) {
 	}
 
 	hintY := top + float64(visible)*rowH + rowH
-	g.font.draw(screen, "[enter] pick   [esc] keep current   type to jump", cx, hintY, 1, white, alignCenter)
+	g.font.draw(screen, "[enter] confirm   [esc] cancel   type to jump", cx, hintY, 1, white, alignCenter)
 }
 
 func (g *Game) drawMessage(screen *ebiten.Image, msg string) {
