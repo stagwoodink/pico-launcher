@@ -8,8 +8,14 @@ import (
 )
 
 const (
-	scrollEase      = 0.22 // per-tick catch-up fraction while easing toward target
-	scrollFriction  = 0.92 // per-tick velocity decay while coasting on momentum
+	// springK/springDamping replace a plain "ease toward target" with a
+	// light spring: springK is how hard it pulls, springDamping is how
+	// much velocity survives each tick. This combo is comfortably in the
+	// underdamped range (see the eigenvalue check that motivated it), so
+	// it settles with one small, quick overshoot rather than oscillating.
+	springK         = 0.10
+	springDamping   = 0.80
+	scrollFriction  = 0.92 // per-tick velocity decay while coasting on drag/fling momentum
 	scrollVelEps    = 0.003
 	scrollSettleEps = 0.001
 )
@@ -46,9 +52,12 @@ func (g *Game) updateScroll() {
 		return
 	}
 
-	g.pos += (g.target - g.pos) * scrollEase
-	if math.Abs(g.target-g.pos) < scrollSettleEps {
+	g.vel += (g.target - g.pos) * springK
+	g.vel *= springDamping
+	g.pos += g.vel
+	if math.Abs(g.target-g.pos) < scrollSettleEps && math.Abs(g.vel) < scrollSettleEps {
 		g.pos = g.target
+		g.vel = 0
 	}
 }
 
