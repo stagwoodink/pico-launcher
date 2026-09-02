@@ -90,17 +90,24 @@ type Game struct {
 	font *bitmapFont
 
 	// bbsIndex is the scraped BBS cart index, loaded once in the background
-	// after carts load. bbsBadge marks carts whose local .p8 has no
-	// confident match ("?" tile badge, resolved via [Tab] on that cart).
-	bbsIndex    []bbsindex.BBSCart
-	bbsBadge    map[string]bool
-	bbsResultCh chan bbsEnrichResult
+	// after carts load; bbsIndexSorted is the same data sorted by title, for
+	// the "!" full-list browse. bbsBadge marks a cart with candidates worth
+	// narrowing from ("?"); bbsUnfound marks one with no parseable local
+	// title at all, so there's nothing to fuzzy-match against ("!") — both
+	// are resolved via [Tab] on that cart, just from a different source list.
+	bbsIndex       []bbsindex.BBSCart
+	bbsIndexSorted []bbsindex.BBSCart
+	bbsBadge       map[string]bool
+	bbsUnfound     map[string]bool
+	bbsResultCh    chan bbsEnrichResult
 
 	// Set while stateResolvingBBS is active.
-	resolveCart    string
-	resolveOptions []bbsindex.BBSCart
-	resolveSel     int
-	resolveCh      chan bbsResolveResult
+	resolveCart        string
+	resolveOptions     []bbsindex.BBSCart
+	resolveSel         int
+	resolveTypeahead   string
+	resolveTypeaheadAt time.Time
+	resolveCh          chan bbsResolveResult
 }
 
 // bbsEnrichResult is what the background enrichment pass hands back to the
@@ -109,7 +116,8 @@ type Game struct {
 type bbsEnrichResult struct {
 	index    []bbsindex.BBSCart
 	replaced map[string]carts.Cart
-	badges   map[string]bool
+	badges   map[string]bool // has candidates ("?")
+	unfound  map[string]bool // no parseable title ("!")
 }
 
 type bbsResolveResult struct {
@@ -190,6 +198,7 @@ func (g *Game) startBBSEnrichment() {
 		}
 		replaced := map[string]carts.Cart{}
 		badges := map[string]bool{}
+		unfound := map[string]bool{}
 		for _, c := range snapshot {
 			if c.Image != "" || !strings.HasSuffix(strings.ToLower(c.Path), ".p8") {
 				continue
@@ -197,22 +206,26 @@ func (g *Game) startBBSEnrichment() {
 			title, author := bbsmatch.ParseP8Meta(c.Path)
 			best, _, ok := bbsmatch.Match(title, author, index)
 			if !ok {
-				badges[c.Name] = true
+				if title == "" {
+					unfound[c.Name] = true
+				} else {
+					badges[c.Name] = true
+				}
 				continue
 			}
 			newPath, err := bbsreplace.Replace(c.Path, best.PNGURL)
 			if err != nil {
-				badges[c.Name] = true
+				badges[c.Name] = true // a candidate exists, only the download failed
 				continue
 			}
 			replaced[c.Name] = carts.Cart{Name: c.Name, Path: newPath, Image: newPath}
 		}
-		ch <- bbsEnrichResult{index: index, replaced: replaced, badges: badges}
+		ch <- bbsEnrichResult{index: index, replaced: replaced, badges: badges, unfound: unfound}
 	}()
 }
 
 // pollBBSEnrichment applies a finished background enrichment pass, if one
-// has landed: swaps in any auto-replaced carts and records "?" badges.
+// has landed: swaps in any auto-replaced carts and records "?"/"!" badges.
 func (g *Game) pollBBSEnrichment() {
 	if g.bbsResultCh == nil {
 		return
@@ -222,6 +235,14 @@ func (g *Game) pollBBSEnrichment() {
 		g.bbsResultCh = nil
 		g.bbsIndex = res.index
 		g.bbsBadge = res.badges
+		g.bbsUnfound = res.unfound
+		if len(res.index) > 0 {
+			sorted := append([]bbsindex.BBSCart(nil), res.index...)
+			sort.Slice(sorted, func(i, j int) bool {
+				return strings.ToLower(sorted[i].Title) < strings.ToLower(sorted[j].Title)
+			})
+			g.bbsIndexSorted = sorted
+		}
 		if len(res.replaced) > 0 {
 			for i, c := range g.baseCarts {
 				if nc, ok := res.replaced[c.Name]; ok {
@@ -423,7 +444,7 @@ func (g *Game) updateBrowsing() {
 	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
 		shift := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
 		if !shift {
-			if cart, ok := g.selectedCart(); ok && g.bbsBadge[cart.Name] {
+			if cart, ok := g.selectedCart(); ok && (g.bbsBadge[cart.Name] || g.bbsUnfound[cart.Name]) {
 				g.openBBSResolve(cart)
 				return
 			}
@@ -580,16 +601,25 @@ func (g *Game) selfHeal(cart carts.Cart) bool {
 	return healed
 }
 
-// openBBSResolve enters the on-demand candidate picker for a badged cart.
+// openBBSResolve enters the on-demand picker for a badged cart: a narrowed
+// candidate list for "?" (has plausible matches), or the entire sorted BBS
+// index for "!" (no local title to narrow from at all) — type-ahead is how
+// you jump through that full list to find the right one by hand.
 func (g *Game) openBBSResolve(cart carts.Cart) {
-	title, author := bbsmatch.ParseP8Meta(cart.Path)
-	opts := bbsmatch.Candidates(title, author, g.bbsIndex, bbsCandidateCount)
+	var opts []bbsindex.BBSCart
+	if g.bbsBadge[cart.Name] {
+		title, author := bbsmatch.ParseP8Meta(cart.Path)
+		opts = bbsmatch.Candidates(title, author, g.bbsIndex, bbsCandidateCount)
+	} else if g.bbsUnfound[cart.Name] {
+		opts = g.bbsIndexSorted
+	}
 	if len(opts) == 0 {
 		return
 	}
 	g.resolveCart = cart.Name
 	g.resolveOptions = opts
 	g.resolveSel = 0
+	g.resolveTypeahead = ""
 	g.returnState = stateBrowsing
 	g.state = stateResolvingBBS
 }
@@ -601,6 +631,7 @@ func (g *Game) updateResolvingBBS() {
 			g.resolveCh = nil
 			if res.ok {
 				delete(g.bbsBadge, res.name)
+				delete(g.bbsUnfound, res.name)
 				for i, c := range g.baseCarts {
 					if c.Name == res.name {
 						g.baseCarts[i] = res.cart
@@ -620,14 +651,47 @@ func (g *Game) updateResolvingBBS() {
 	if inpututil.IsKeyJustPressed(ebiten.KeyDown) {
 		g.resolveSel = wrap(g.resolveSel+1, len(g.resolveOptions))
 	}
+	g.updateResolveTypeahead()
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) || inpututil.IsKeyJustPressed(ebiten.KeyBackspace) {
 		// keep current: just drop the badge, no replacement.
 		delete(g.bbsBadge, g.resolveCart)
+		delete(g.bbsUnfound, g.resolveCart)
 		g.state = g.returnState
 		return
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
 		g.confirmBBSResolve()
+	}
+}
+
+// updateResolveTypeahead jumps resolveSel to the first option whose title
+// starts with what's been typed — same prefix-search shape as the main
+// cart browser's updateTypeahead, just over resolveOptions instead of
+// allCarts, since the full "!" list is otherwise too long to page through.
+func (g *Game) updateResolveTypeahead() {
+	var typed []rune
+	for _, r := range ebiten.AppendInputChars(nil) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			typed = append(typed, r)
+		}
+	}
+	if len(typed) == 0 {
+		return
+	}
+
+	now := time.Now()
+	if now.Sub(g.resolveTypeaheadAt) > typeaheadTimeout {
+		g.resolveTypeahead = ""
+	}
+	g.resolveTypeahead += string(typed)
+	g.resolveTypeaheadAt = now
+
+	needle := strings.ToUpper(g.resolveTypeahead)
+	for i, c := range g.resolveOptions {
+		if strings.HasPrefix(strings.ToUpper(c.Title), needle) {
+			g.resolveSel = i
+			return
+		}
 	}
 }
 

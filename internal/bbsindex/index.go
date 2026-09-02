@@ -16,11 +16,11 @@ import (
 
 // BBSCart is one cart as published on the PICO-8 BBS.
 type BBSCart struct {
-	ID      string `json:"id"`    // BBS lid, e.g. "oswald_the_lucky_rabbit_000-1"
-	Title   string `json:"title"`
-	Author  string `json:"author"`
-	TID     int    `json:"tid"`   // BBS forum thread id
-	PNGURL  string `json:"png_url"` // absolute URL to the official .p8.png
+	ID     string `json:"id"` // BBS lid, e.g. "oswald_the_lucky_rabbit_000-1"
+	Title  string `json:"title"`
+	Author string `json:"author"`
+	TID    int    `json:"tid"`     // BBS forum thread id
+	PNGURL string `json:"png_url"` // absolute URL to the official .p8.png
 }
 
 // IndexURL is where the app fetches the scraper's published output from.

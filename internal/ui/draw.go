@@ -45,27 +45,40 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 }
 
-// drawResolveBBS renders the [Tab] candidate picker: the badged cart's
-// name, each candidate title/author with the selection inverted, and the
-// keys to confirm or bail out — this app's one deliberate exception to
-// "never show a dialog," since resolving a low-confidence match is
-// inherently a pick-one-of-several choice.
+// drawResolveBBS renders the [Tab] picker: the badged cart's name, a
+// window of options around the current selection (narrowed candidates for
+// "?", or a scrollable/type-ahead-searchable slice of the entire BBS index
+// for "!"), the selection inverted, and the keys to confirm or bail out —
+// this app's one deliberate exception to "never show a dialog," since
+// resolving a match is inherently a pick-one-of-several choice.
 func (g *Game) drawResolveBBS(screen *ebiten.Image) {
 	if g.font == nil {
 		return
 	}
 	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
 	cx := float64(w) / 2
+	n := len(g.resolveOptions)
 
 	rowH := listRowHeight()
-	top := float64(h)/2 - rowH*float64(len(g.resolveOptions))/2
+	radius := int(float64(h)/2/rowH/2) + 1
+	if radius > n/2 {
+		radius = n / 2
+	}
+	visible := radius*2 + 1
+	top := float64(h)/2 - rowH*float64(visible)/2
 
-	g.font.draw(screen, strings.ToUpper("match: "+g.resolveCart), cx, top-rowH, listScale, white, alignCenter)
+	header := "match: " + g.resolveCart
+	if g.resolveTypeahead != "" {
+		header += "   /" + g.resolveTypeahead
+	}
+	g.font.draw(screen, strings.ToUpper(header), cx, top-rowH, listScale, white, alignCenter)
 
-	for i, c := range g.resolveOptions {
-		y := top + float64(i)*rowH
+	for off := -radius; off <= radius; off++ {
+		idx := wrap(g.resolveSel+off, n)
+		c := g.resolveOptions[idx]
+		y := top + float64(off+radius)*rowH
 		col := white
-		if i == g.resolveSel {
+		if idx == g.resolveSel {
 			fillRect(screen, 0, y-rowH/2, float64(w), rowH, white)
 			col = black
 		}
@@ -73,8 +86,8 @@ func (g *Game) drawResolveBBS(screen *ebiten.Image) {
 		g.font.draw(screen, label, cx, y, listScale, col, alignCenter)
 	}
 
-	hintY := top + float64(len(g.resolveOptions))*rowH + rowH
-	g.font.draw(screen, "[enter] pick   [esc] keep current", cx, hintY, 1, white, alignCenter)
+	hintY := top + float64(visible)*rowH + rowH
+	g.font.draw(screen, "[enter] pick   [esc] keep current   type to jump", cx, hintY, 1, white, alignCenter)
 }
 
 func (g *Game) drawMessage(screen *ebiten.Image, msg string) {
@@ -158,8 +171,10 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 }
 
 // marksFor returns the small under-tile indicator for a cart: "~" if it's
-// currently one of the pinned recents, "*" if it's favorited, "?" if its BBS
-// cart-art match is unresolved ([Tab] to resolve it), any combination, or "".
+// currently one of the pinned recents, "*" if it's favorited, "?" if it has
+// candidate BBS matches to narrow from, "!" if it has no parseable local
+// title at all (nothing to narrow from — [Tab] browses the full BBS index
+// instead), any combination, or "".
 func (g *Game) marksFor(name string) string {
 	if g.font == nil {
 		return ""
@@ -173,6 +188,9 @@ func (g *Game) marksFor(name string) string {
 	}
 	if g.bbsBadge[name] {
 		marks += "?"
+	}
+	if g.bbsUnfound[name] {
+		marks += "!"
 	}
 	return marks
 }

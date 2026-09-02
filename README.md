@@ -48,9 +48,12 @@ downloads the official `.p8.png` and swaps it in silently; the original
 `.p8` is kept in a `.pico-launcher-backups/` folder alongside your carts, not
 deleted. A weak match gets a `?` badge instead of guessing — focus that cart
 and press `[Tab]` to pick from the closest candidates or keep it as-is
-(`[Esc]`/`[Backspace]`). `[Tab]` otherwise reopens the carts-folder picker,
+(`[Esc]`/`[Backspace]`). A cart with no parseable title at all (no `-- title`
+Lua comment to match against) gets a `!` badge instead — `[Tab]` there opens
+the entire BBS index instead of a narrowed list; type to jump to a title, or
+just arrow through it. `[Tab]` otherwise reopens the carts-folder picker,
 same as before — it only does BBS resolution when the focused cart has a
-pending `?`.
+pending `?` or `!`.
 
 ## Build
 
