@@ -12,6 +12,11 @@ import (
 // it as "the" carts folder without asking the user.
 const minCartsForAutoDetect = 5
 
+// BackupDirName is the sibling folder, inside the carts dir, that a
+// deleted or BBS-replaced cart's original file gets moved into instead of
+// being permanently removed.
+const BackupDirName = ".pico-launcher-backups"
+
 // Cart is a single playable cartridge. Image is set when a .p8.png with the
 // same base name exists; a bare .p8 with no image sibling has Image == "".
 type Cart struct {
@@ -105,4 +110,29 @@ func Scan(dir string) []Cart {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// Delete moves a cart's file(s) — its .p8 and/or .p8.png, whichever exist —
+// into BackupDirName instead of removing them, so it's reversible. Returns
+// os.ErrNotExist if neither file was found.
+func Delete(dir, name string) error {
+	backupDir := filepath.Join(dir, BackupDirName)
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return err
+	}
+	moved := false
+	for _, ext := range []string{".p8", ".p8.png"} {
+		src := filepath.Join(dir, name+ext)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if err := os.Rename(src, filepath.Join(backupDir, name+ext)); err != nil {
+			return err
+		}
+		moved = true
+	}
+	if !moved {
+		return os.ErrNotExist
+	}
+	return nil
 }

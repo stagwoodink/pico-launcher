@@ -10,7 +10,15 @@ either the command line or the BBS. This is a tiny always-on-top-of-your-carts
 picker: point it at your carts folder once, then browse art and press a
 button.
 
-## Interface
+## First run
+
+It tries to find your PICO-8 install and carts folder on its own (common
+install paths, then any folder with 5+ carts). If it can't, the window sits
+blank — press `Tab` and a native folder picker opens. That's the one and
+only prompt this app will ever show you; do it once per missing piece
+(PICO-8 install, then carts folder) and it's saved to config for good.
+
+## Browsing
 
 Every cart is always in play — how it's shown just depends on the view:
 
@@ -25,7 +33,9 @@ Every cart is always in play — how it's shown just depends on the view:
   Keep typing within ~0.7s to search a longer prefix; pause and the next
   letter starts a new search.
 - **Launch**: `Enter`, or `A`/`Start`/`Select` on a controller. The
-  launcher stays open.
+  launcher stays open. Launching doesn't yank your view over to the
+  recents block, even if this launch is what just pinned the cart there —
+  you stay put on whichever copy you were looking at.
 - **`Space`**: favorite/unfavorite the current cart (marked `*`).
 
 Up to 3 recently-launched carts are pinned at the very front (newest
@@ -34,26 +44,62 @@ first, marked `~`), followed by your favorites (alphabetical, marked
 whichever section it's currently in. Every cart still also appears in
 its normal alphabetical spot.
 
-First run: it tries to find your PICO-8 install and carts folder on its own
-(common install paths, then any folder with 5+ carts). If it can't, it'll
-prompt `hit [tab]` and open a native folder picker — a one-time thing, saved
-to config after.
+## Deleting a cart
 
-### BBS cart art
+Hold `Backspace`, `Delete`, or `-` on the selected cart. It fills up (white
+top-down in carasel; the selection bar fades to grey with the title pulled
+left in list mode) over about three-quarters of a second. Once full it
+settles into an armed state — let go, then press the same key again to
+actually delete it. Pressing any *other* key at any point during the fill
+or while armed cancels the delete and does whatever that key normally does
+(keeps navigating, launches, whatever).
+
+Deleting never actually destroys anything: the cart's file(s) move into a
+`.pico-launcher-backups/` folder inside your carts dir.
+
+## Undo
+
+`Ctrl+Z` reverses the single most recent manual BBS pick — whether you
+replaced a cart's art or added a new one from the `+` picker. One level
+deep: it's for "wait, wrong one," not a full history.
+
+## BBS cart art
 
 A `.p8` with no cover art gets checked in the background against a daily
 scraped index of the PICO-8 BBS (`cmd/bbs-scraper`, `carts.json`, served via
-jsDelivr — see `internal/bbsindex`). A confident title/author match
-downloads the official `.p8.png` and swaps it in silently; the original
-`.p8` is kept in a `.pico-launcher-backups/` folder alongside your carts, not
-deleted. A weak match gets a `?` badge instead of guessing — focus that cart
-and press `[Tab]` to pick from the closest candidates or keep it as-is
-(`[Esc]`/`[Backspace]`). A cart with no parseable title at all (no `-- title`
-Lua comment to match against) gets a `!` badge instead — `[Tab]` there opens
-the entire BBS index instead of a narrowed list; type to jump to a title, or
-just arrow through it. `[Tab]` otherwise reopens the carts-folder picker,
-same as before — it only does BBS resolution when the focused cart has a
-pending `?` or `!`.
+jsDelivr — see `internal/bbsindex`). The match runs against the cart's
+`-- title` / `-- by author` Lua comments when present, falling back to the
+filename otherwise.
+
+- **Confident match**: downloads the official `.p8.png` and swaps it in
+  silently. The original `.p8` moves to `.pico-launcher-backups/`, not
+  deleted.
+- **`?` badge**: a weaker match, but there are real candidates to pick
+  from. Focus the cart and press `Tab`.
+- **`!` badge**: nothing to go on at all (no title comment, and the
+  filename didn't come close to anything). `Tab` still opens the picker,
+  just starting from the entire BBS index instead of a narrowed list.
+
+Either badge opens the same picker: a live, editable search box (start
+typing straight away — no separate search key) with suggestions re-ranked
+below it as you edit the query. `↑`/`↓` move the selection and repeat/
+accelerate the longer you hold them, same as scrolling your own cart list.
+`Enter` confirms; `Esc` backs out without touching anything — the badge
+stays exactly as it was, so `Tab` reopens it later no worse off.
+
+`Shift+Tab` opens that same picker on *any* selected cart, badged or not —
+useful for manually overriding even a cart that already picked up real art,
+if it picked up the wrong one.
+
+`Tab` with no cart selected, or on an unbadged cart, reopens the
+carts-folder picker instead.
+
+## Adding a cart
+
+Press `+` anywhere while browsing to open the same live search, but scoped
+to BBS carts you don't already have (matched by title, so it won't offer
+you a duplicate of something already in your collection). `Enter` downloads
+the pick as a new cart file, named after its title.
 
 ## Build
 

@@ -4,7 +4,9 @@ package ui
 import (
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -22,8 +24,9 @@ import (
 	"github.com/stagwoodink/pico-launcher/internal/pico8"
 )
 
-// bbsCandidateCount is how many options the [Tab] resolution picker offers.
-const bbsCandidateCount = 5
+// bbsSuggestionCount is how many live-search suggestions the [Tab]
+// resolution picker re-ranks and shows as the query is edited.
+const bbsSuggestionCount = 30
 
 // typeaheadTimeout is how long to wait after the last keystroke before a
 // new letter starts a fresh search instead of extending the current one.
@@ -101,13 +104,59 @@ type Game struct {
 	bbsUnfound     map[string]bool
 	bbsResultCh    chan bbsEnrichResult
 
-	// Set while stateResolvingBBS is active.
-	resolveCart        string
-	resolveOptions     []bbsindex.BBSCart
-	resolveSel         int
-	resolveTypeahead   string
-	resolveTypeaheadAt time.Time
-	resolveCh          chan bbsResolveResult
+	// Set while stateResolvingBBS is active: a live search box (resolveQuery,
+	// editable) with suggestions re-ranked on every edit against whichever
+	// pool this picker is searching (resolveSearchIndex/-Sorted — the whole
+	// BBS index when replacing a cart's art, or that minus already-owned
+	// titles when adding a new one, see resolveAdding), and resolveSel
+	// scrollable through them with the same held-key acceleration as the
+	// main cart browser.
+	resolveCart         string // "" when resolveAdding — there's no cart being replaced
+	resolveAdding       bool
+	resolveQuery        string
+	resolveAuthorHint   string
+	resolveSearchIndex  []bbsindex.BBSCart
+	resolveSearchSorted []bbsindex.BBSCart
+	resolveSuggestions  []bbsindex.BBSCart
+	resolveSel          int
+	resolveCh           chan bbsResolveResult
+
+	// bbsLastUndo is the single most recent manual resolve action (replace
+	// or add), reversible with Ctrl+Z. Only one level deep — good enough
+	// for "I picked the wrong one," not a full history.
+	bbsLastUndo *bbsUndo
+
+	// Cart deletion: holding [Backspace]/[Delete]/[-] on the selected cart
+	// fills it up (deleteProgress 0..1), arms once full, and a second press
+	// deletes (moves to backup) — any other key cancels instead.
+	deleteState    deleteState
+	deleteCartName string
+	deleteProgress float64
+}
+
+type deleteState int
+
+const (
+	deleteStateNone deleteState = iota
+	deleteStateFilling
+	deleteStateArmed
+)
+
+// bbsUndoKind distinguishes what Ctrl+Z needs to reverse.
+type bbsUndoKind int
+
+const (
+	undoKindReplace bbsUndoKind = iota
+	undoKindAdd
+)
+
+type bbsUndo struct {
+	kind         bbsUndoKind
+	cartName     string
+	originalPath string // undoKindReplace only
+	newPath      string
+	wasBadge     bool // undoKindReplace only
+	wasUnfound   bool // undoKindReplace only
 }
 
 // bbsEnrichResult is what the background enrichment pass hands back to the
@@ -121,9 +170,13 @@ type bbsEnrichResult struct {
 }
 
 type bbsResolveResult struct {
-	name string
-	cart carts.Cart
-	ok   bool
+	name         string
+	cart         carts.Cart
+	ok           bool
+	adding       bool
+	originalPath string // undoKindReplace only
+	wasBadge     bool   // undoKindReplace only
+	wasUnfound   bool   // undoKindReplace only
 }
 
 func New(cfg config.Config) *Game {
@@ -204,7 +257,11 @@ func (g *Game) startBBSEnrichment() {
 				continue
 			}
 			title, author := bbsmatch.ParseP8Meta(c.Path)
-			best, _, ok := bbsmatch.Match(title, author, index)
+			searchTitle := title
+			if searchTitle == "" {
+				searchTitle = c.Name // cross-reference the filename when there's no title comment to go on
+			}
+			best, _, ok := bbsmatch.Match(searchTitle, author, index)
 			if !ok {
 				if title == "" {
 					unfound[c.Name] = true
@@ -307,20 +364,35 @@ func (g *Game) rebuildOrder() {
 	g.favoriteSet = favoriteSet
 
 	if hadSelection {
-		g.snapToCart(selected.Name)
+		g.snapToCart(selected.Name, g.target)
 	}
 }
 
-// snapToCart moves the selection to name's first occurrence in allCarts,
-// with no animation — used after a reorder, where the list itself just
-// changed shape rather than the user navigating through it.
-func (g *Game) snapToCart(name string) {
+// snapToCart moves the selection to name's occurrence closest to
+// preferNear (the pre-rebuild position), with no animation — used after a
+// reorder, where the list itself just changed shape rather than the user
+// navigating through it. "Closest" matters specifically for launching a
+// cart into the recents block: without it, the newly-inserted recents
+// duplicate up front would always win as "the first occurrence" and yank
+// the view away from the copy the user was actually looking at.
+func (g *Game) snapToCart(name string, preferNear float64) {
+	n := len(g.allCarts)
+	from := wrap(int(math.Round(preferNear)), n)
+	bestIdx := -1
+	bestDist := math.MaxFloat64
 	for i, c := range g.allCarts {
-		if c.Name == name {
-			g.pos, g.target, g.vel = float64(i), float64(i), 0
-			return
+		if c.Name != name {
+			continue
+		}
+		if d := math.Abs(shortestDelta(from, i, n)); d < bestDist {
+			bestDist = d
+			bestIdx = i
 		}
 	}
+	if bestIdx == -1 {
+		return
+	}
+	g.pos, g.target, g.vel = float64(bestIdx), float64(bestIdx), 0
 }
 
 // --- ebiten.Game ---
@@ -432,6 +504,14 @@ func (g *Game) pollPicker(onResult func(string)) {
 func (g *Game) updateBrowsing() {
 	g.pollBBSEnrichment()
 
+	ctrl := ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
+	if ctrl && inpututil.IsKeyJustPressed(ebiten.KeyZ) && g.bbsLastUndo != nil {
+		g.undoBBSResolve()
+		return
+	}
+
+	g.updateCartDelete()
+
 	if inpututil.IsKeyJustPressed(ebiten.KeyBackquote) {
 		if g.mode == modeCarasel {
 			g.mode = modeList
@@ -441,19 +521,27 @@ func (g *Game) updateBrowsing() {
 		return
 	}
 
+	for _, r := range ebiten.AppendInputChars(nil) {
+		if r == '+' {
+			g.openAddCartPicker()
+			return
+		}
+	}
+
 	if inpututil.IsKeyJustPressed(ebiten.KeyTab) {
 		shift := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
-		if !shift {
-			if cart, ok := g.selectedCart(); ok && (g.bbsBadge[cart.Name] || g.bbsUnfound[cart.Name]) {
-				g.openBBSResolve(cart)
-				return
-			}
+		cart, ok := g.selectedCart()
+		if ok && shift {
+			// Shift+Tab: force the full search/replace picker on whatever
+			// cart is selected, matched or not.
+			g.openBBSResolveForce(cart)
+			return
 		}
-		if shift {
-			g.pickPico8()
-		} else {
-			g.pickCarts()
+		if ok && (g.bbsBadge[cart.Name] || g.bbsUnfound[cart.Name]) {
+			g.openBBSResolve(cart)
+			return
 		}
+		g.pickCarts()
 		return
 	}
 
@@ -601,27 +689,90 @@ func (g *Game) selfHeal(cart carts.Cart) bool {
 	return healed
 }
 
-// openBBSResolve enters the on-demand picker for a badged cart: a narrowed
-// candidate list for "?" (has plausible matches), or the entire sorted BBS
-// index for "!" (no local title to narrow from at all) — type-ahead is how
-// you jump through that full list to find the right one by hand.
+// openBBSResolve enters the on-demand picker for a badged cart only.
 func (g *Game) openBBSResolve(cart carts.Cart) {
-	var opts []bbsindex.BBSCart
-	if g.bbsBadge[cart.Name] {
-		title, author := bbsmatch.ParseP8Meta(cart.Path)
-		opts = bbsmatch.Candidates(title, author, g.bbsIndex, bbsCandidateCount)
-	} else if g.bbsUnfound[cart.Name] {
-		opts = g.bbsIndexSorted
-	}
-	if len(opts) == 0 {
+	if !g.bbsBadge[cart.Name] && !g.bbsUnfound[cart.Name] {
 		return
 	}
-	g.resolveCart = cart.Name
-	g.resolveOptions = opts
+	g.openBBSResolveAny(cart)
+}
+
+// openBBSResolveForce enters the picker on any cart, badged or not
+// (Shift+Tab) — lets you manually override even a cart that already has
+// real art.
+func (g *Game) openBBSResolveForce(cart carts.Cart) {
+	g.openBBSResolveAny(cart)
+}
+
+// openBBSResolveAny is the shared setup: a live, editable search box
+// pre-filled with the best local guess (the parsed title, or the filename
+// when there wasn't one to parse) and re-ranked suggestions below it,
+// searching the whole BBS index.
+func (g *Game) openBBSResolveAny(cart carts.Cart) {
+	title, author := bbsmatch.ParseP8Meta(cart.Path)
+	if title == "" {
+		title = cart.Name
+	}
+	g.beginResolve(cart.Name, title, author, g.bbsIndex, g.bbsIndexSorted, false)
+}
+
+// openAddCartPicker enters the picker for adding a brand-new cart: the
+// same live search, but over the BBS index minus anything whose title
+// already matches a cart you have.
+func (g *Game) openAddCartPicker() {
+	if len(g.bbsIndex) == 0 {
+		return
+	}
+	owned := make(map[string]bool, len(g.baseCarts))
+	for _, c := range g.baseCarts {
+		t, _ := bbsmatch.ParseP8Meta(c.Path)
+		if t == "" {
+			t = c.Name
+		}
+		owned[bbsmatch.Normalize(t)] = true
+	}
+	pool := make([]bbsindex.BBSCart, 0, len(g.bbsIndex))
+	for _, e := range g.bbsIndex {
+		if !owned[bbsmatch.Normalize(e.Title)] {
+			pool = append(pool, e)
+		}
+	}
+	if len(pool) == 0 {
+		return
+	}
+	sorted := append([]bbsindex.BBSCart(nil), pool...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return strings.ToLower(sorted[i].Title) < strings.ToLower(sorted[j].Title)
+	})
+	g.beginResolve("", "", "", pool, sorted, true)
+}
+
+func (g *Game) beginResolve(cartName, title, author string, pool, sorted []bbsindex.BBSCart, adding bool) {
+	g.resolveCart = cartName
+	g.resolveAdding = adding
+	g.resolveQuery = title
+	g.resolveAuthorHint = author
+	g.resolveSearchIndex = pool
+	g.resolveSearchSorted = sorted
 	g.resolveSel = 0
-	g.resolveTypeahead = ""
+	g.recomputeResolveSuggestions()
 	g.returnState = stateBrowsing
 	g.state = stateResolvingBBS
+}
+
+// recomputeResolveSuggestions re-ranks against the picker's search pool
+// every time resolveQuery is edited. An empty query falls back to browsing
+// the whole sorted pool rather than showing nothing.
+func (g *Game) recomputeResolveSuggestions() {
+	q := strings.TrimSpace(g.resolveQuery)
+	if q == "" {
+		g.resolveSuggestions = g.resolveSearchSorted
+	} else {
+		g.resolveSuggestions = bbsmatch.Candidates(q, g.resolveAuthorHint, g.resolveSearchIndex, bbsSuggestionCount)
+	}
+	if g.resolveSel >= len(g.resolveSuggestions) {
+		g.resolveSel = 0
+	}
 }
 
 func (g *Game) updateResolvingBBS() {
@@ -630,11 +781,22 @@ func (g *Game) updateResolvingBBS() {
 		case res := <-g.resolveCh:
 			g.resolveCh = nil
 			if res.ok {
-				delete(g.bbsBadge, res.name)
-				delete(g.bbsUnfound, res.name)
-				for i, c := range g.baseCarts {
-					if c.Name == res.name {
-						g.baseCarts[i] = res.cart
+				if res.adding {
+					g.baseCarts = append(g.baseCarts, res.cart)
+					sort.Slice(g.baseCarts, func(i, j int) bool { return g.baseCarts[i].Name < g.baseCarts[j].Name })
+					g.bbsLastUndo = &bbsUndo{kind: undoKindAdd, cartName: res.cart.Name, newPath: res.cart.Path}
+				} else {
+					delete(g.bbsBadge, res.name)
+					delete(g.bbsUnfound, res.name)
+					for i, c := range g.baseCarts {
+						if c.Name == res.name {
+							g.baseCarts[i] = res.cart
+						}
+					}
+					g.bbsLastUndo = &bbsUndo{
+						kind: undoKindReplace, cartName: res.name,
+						originalPath: res.originalPath, newPath: res.cart.Path,
+						wasBadge: res.wasBadge, wasUnfound: res.wasUnfound,
 					}
 				}
 				g.rebuildOrder()
@@ -645,14 +807,20 @@ func (g *Game) updateResolvingBBS() {
 		return
 	}
 
-	if inpututil.IsKeyJustPressed(ebiten.KeyUp) {
-		g.resolveSel = wrap(g.resolveSel-1, len(g.resolveOptions))
+	// Scrollable, holdable — same accelerating key-repeat as the main cart
+	// browser's left/right, just driving resolveSel instead of g.target.
+	if n := len(g.resolveSuggestions); n > 0 {
+		if repeatFire(keyDuration(ebiten.KeyUp)) {
+			g.resolveSel = wrap(g.resolveSel-1, n)
+		}
+		if repeatFire(keyDuration(ebiten.KeyDown)) {
+			g.resolveSel = wrap(g.resolveSel+1, n)
+		}
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyDown) {
-		g.resolveSel = wrap(g.resolveSel+1, len(g.resolveOptions))
-	}
-	g.updateResolveTypeahead()
-	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) || inpututil.IsKeyJustPressed(ebiten.KeyBackspace) {
+
+	g.updateResolveQueryInput()
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
 		// bail out: no selection was confirmed, so the badge stays exactly
 		// as it was — [Tab] can reopen this picker again later.
 		g.state = g.returnState
@@ -663,43 +831,41 @@ func (g *Game) updateResolvingBBS() {
 	}
 }
 
-// updateResolveTypeahead jumps resolveSel to the first option whose title
-// starts with what's been typed — same prefix-search shape as the main
-// cart browser's updateTypeahead, just over resolveOptions instead of
-// allCarts, since the full "!" list is otherwise too long to page through.
-func (g *Game) updateResolveTypeahead() {
-	var typed []rune
+// updateResolveQueryInput is a plain editable text box: typed characters
+// append, [Backspace] deletes the last rune, any edit re-ranks suggestions.
+func (g *Game) updateResolveQueryInput() {
+	edited := false
 	for _, r := range ebiten.AppendInputChars(nil) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			typed = append(typed, r)
+		if unicode.IsPrint(r) {
+			g.resolveQuery += string(r)
+			edited = true
 		}
 	}
-	if len(typed) == 0 {
-		return
+	if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) && len(g.resolveQuery) > 0 {
+		runes := []rune(g.resolveQuery)
+		g.resolveQuery = string(runes[:len(runes)-1])
+		edited = true
 	}
-
-	now := time.Now()
-	if now.Sub(g.resolveTypeaheadAt) > typeaheadTimeout {
-		g.resolveTypeahead = ""
-	}
-	g.resolveTypeahead += string(typed)
-	g.resolveTypeaheadAt = now
-
-	needle := strings.ToUpper(g.resolveTypeahead)
-	for i, c := range g.resolveOptions {
-		if strings.HasPrefix(strings.ToUpper(c.Title), needle) {
-			g.resolveSel = i
-			return
-		}
+	if edited {
+		g.recomputeResolveSuggestions()
 	}
 }
 
-// confirmBBSResolve downloads and swaps in the picked candidate off the
-// Ebiten goroutine, same pattern as the file pickers (pollPicker).
+// confirmBBSResolve downloads and swaps in (or adds) the picked
+// suggestion off the Ebiten goroutine, same pattern as the file pickers
+// (pollPicker).
 func (g *Game) confirmBBSResolve() {
-	name := g.resolveCart
-	picked := g.resolveOptions[g.resolveSel]
+	if g.resolveSel >= len(g.resolveSuggestions) {
+		return
+	}
+	picked := g.resolveSuggestions[g.resolveSel]
 
+	if g.resolveAdding {
+		g.confirmAddCart(picked)
+		return
+	}
+
+	name := g.resolveCart
 	var cartPath string
 	for _, c := range g.baseCarts {
 		if c.Name == name {
@@ -710,6 +876,8 @@ func (g *Game) confirmBBSResolve() {
 		g.state = g.returnState
 		return
 	}
+	wasBadge := g.bbsBadge[name]
+	wasUnfound := g.bbsUnfound[name]
 
 	ch := make(chan bbsResolveResult, 1)
 	g.resolveCh = ch
@@ -719,8 +887,197 @@ func (g *Game) confirmBBSResolve() {
 			ch <- bbsResolveResult{name: name, ok: false}
 			return
 		}
-		ch <- bbsResolveResult{name: name, ok: true, cart: carts.Cart{Name: name, Path: newPath, Image: newPath}}
+		ch <- bbsResolveResult{
+			name: name, ok: true, originalPath: cartPath, wasBadge: wasBadge, wasUnfound: wasUnfound,
+			cart: carts.Cart{Name: name, Path: newPath, Image: newPath},
+		}
 	}()
+}
+
+// confirmAddCart downloads picked as a brand-new cart file, named after
+// its title (sanitized, de-duplicated against what's already on disk).
+func (g *Game) confirmAddCart(picked bbsindex.BBSCart) {
+	dest := g.newCartPath(picked.Title)
+	if dest == "" {
+		g.state = g.returnState
+		return
+	}
+	base := strings.TrimSuffix(filepath.Base(dest), ".p8.png")
+
+	ch := make(chan bbsResolveResult, 1)
+	g.resolveCh = ch
+	go func() {
+		if err := bbsreplace.Download(dest, picked.PNGURL); err != nil {
+			ch <- bbsResolveResult{ok: false}
+			return
+		}
+		ch <- bbsResolveResult{ok: true, adding: true, cart: carts.Cart{Name: base, Path: dest, Image: dest}}
+	}()
+}
+
+// newCartPath turns a BBS title into a free .p8.png path in the carts
+// dir, appending " (2)", " (3)", ... on a name collision.
+func (g *Game) newCartPath(title string) string {
+	base := sanitizeCartName(title)
+	if base == "" {
+		return ""
+	}
+	candidate := base
+	for i := 2; ; i++ {
+		p := filepath.Join(g.cfg.CartsDir, candidate+".p8.png")
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			return p
+		}
+		candidate = base + " (" + strconv.Itoa(i) + ")"
+	}
+}
+
+func sanitizeCartName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == ' ':
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// undoBBSResolve reverses the single most recent manual resolve action.
+func (g *Game) undoBBSResolve() {
+	u := g.bbsLastUndo
+	if u == nil {
+		return
+	}
+	g.bbsLastUndo = nil
+	switch u.kind {
+	case undoKindReplace:
+		if err := bbsreplace.Undo(u.originalPath, u.newPath); err != nil {
+			return
+		}
+		for i, c := range g.baseCarts {
+			if c.Name == u.cartName {
+				g.baseCarts[i] = carts.Cart{Name: u.cartName, Path: u.originalPath}
+			}
+		}
+		if u.wasBadge {
+			g.bbsBadge[u.cartName] = true
+		}
+		if u.wasUnfound {
+			g.bbsUnfound[u.cartName] = true
+		}
+	case undoKindAdd:
+		if err := os.Remove(u.newPath); err != nil {
+			return
+		}
+		kept := make([]carts.Cart, 0, len(g.baseCarts))
+		for _, c := range g.baseCarts {
+			if c.Name != u.cartName {
+				kept = append(kept, c)
+			}
+		}
+		g.baseCarts = kept
+	}
+	g.rebuildOrder()
+}
+
+// deleteFillTicks is how long [Backspace]/[Delete]/[-] must be held for
+// the delete fill to complete and arm.
+const deleteFillTicks = 45 // ~0.75s at 60 ticks/sec
+
+var deleteKeys = [3]ebiten.Key{ebiten.KeyBackspace, ebiten.KeyDelete, ebiten.KeyMinus}
+
+// updateCartDelete drives the hold-to-delete gesture on the selected cart:
+// fill while held, arm once full, a second press (release + re-press, per
+// Ebiten's just-pressed semantics) deletes; any other just-pressed key
+// cancels without eating that key's own normal handling this tick.
+func (g *Game) updateCartDelete() {
+	holdDur := 0
+	for _, k := range deleteKeys {
+		if d := keyDuration(k); d > holdDur {
+			holdDur = d
+		}
+	}
+	held := holdDur > 0
+	justPressed := false
+	for _, k := range deleteKeys {
+		if inpututil.IsKeyJustPressed(k) {
+			justPressed = true
+		}
+	}
+	selected, ok := g.selectedCart()
+
+	switch g.deleteState {
+	case deleteStateNone:
+		if ok && held {
+			g.deleteState = deleteStateFilling
+			g.deleteCartName = selected.Name
+			g.deleteProgress = float64(holdDur) / float64(deleteFillTicks)
+			if g.deleteProgress >= 1 {
+				g.deleteProgress = 1
+				g.deleteState = deleteStateArmed
+			}
+		}
+	case deleteStateFilling:
+		if !ok || selected.Name != g.deleteCartName || !held || anyOtherKeyJustPressed() {
+			g.resetDeleteState()
+			return
+		}
+		g.deleteProgress = float64(holdDur) / float64(deleteFillTicks)
+		if g.deleteProgress >= 1 {
+			g.deleteProgress = 1
+			g.deleteState = deleteStateArmed
+		}
+	case deleteStateArmed:
+		if ok && selected.Name == g.deleteCartName && justPressed {
+			g.confirmCartDelete(selected)
+			return
+		}
+		if anyOtherKeyJustPressed() || !ok || selected.Name != g.deleteCartName {
+			g.resetDeleteState()
+		}
+	}
+}
+
+func (g *Game) resetDeleteState() {
+	g.deleteState = deleteStateNone
+	g.deleteCartName = ""
+	g.deleteProgress = 0
+}
+
+// confirmCartDelete moves the cart's file(s) to the backup folder and
+// drops it from the collection.
+func (g *Game) confirmCartDelete(cart carts.Cart) {
+	g.resetDeleteState()
+	if err := carts.Delete(g.cfg.CartsDir, cart.Name); err != nil {
+		return
+	}
+	kept := make([]carts.Cart, 0, len(g.baseCarts))
+	for _, c := range g.baseCarts {
+		if c.Name != cart.Name {
+			kept = append(kept, c)
+		}
+	}
+	g.baseCarts = kept
+	delete(g.bbsBadge, cart.Name)
+	delete(g.bbsUnfound, cart.Name)
+	g.rebuildOrder()
+}
+
+func anyOtherKeyJustPressed() bool {
+	for _, k := range inpututil.AppendJustPressedKeys(nil) {
+		excluded := false
+		for _, e := range deleteKeys {
+			if k == e {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			return true
+		}
+	}
+	return false
 }
 
 func wrap(i, n int) int {

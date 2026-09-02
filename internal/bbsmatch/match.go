@@ -78,9 +78,9 @@ func ParseP8Meta(path string) (title, author string) {
 	return title, author
 }
 
-// normalize lowercases and strips everything but letters/digits, so
+// Normalize lowercases and strips everything but letters/digits, so
 // "Oswald the Lucky Rabbit!" and "oswald_the_lucky_rabbit" compare equal.
-func normalize(s string) string {
+func Normalize(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
@@ -95,17 +95,17 @@ func normalize(s string) string {
 // callers get no candidate at all from this call (see MatchCandidates for
 // the on-demand picker case).
 func Match(title, author string, index []bbsindex.BBSCart) (best bbsindex.BBSCart, score float64, ok bool) {
-	nt := normalize(title)
+	nt := Normalize(title)
 	if nt == "" {
 		return bbsindex.BBSCart{}, 0, false
 	}
-	na := normalize(author)
+	na := Normalize(author)
 
 	bestScore := -1.0
 	var bestCart bbsindex.BBSCart
 	for _, c := range index {
-		s := titleScore(nt, normalize(c.Title))
-		if na != "" && normalize(c.Author) == na {
+		s := titleScore(nt, Normalize(c.Title))
+		if na != "" && Normalize(c.Author) == na {
 			s += 0.05 // small tiebreaker boost, not required for a match
 		}
 		if s > bestScore {
@@ -123,11 +123,11 @@ func Match(title, author string, index []bbsindex.BBSCart) (best bbsindex.BBSCar
 // Threshold — for the on-demand "[Tab]" resolution picker, which needs
 // options to choose from even when nothing cleared the auto-match bar.
 func Candidates(title, author string, index []bbsindex.BBSCart, n int) []bbsindex.BBSCart {
-	nt := normalize(title)
+	nt := Normalize(title)
 	if nt == "" || len(index) == 0 {
 		return nil
 	}
-	na := normalize(author)
+	na := Normalize(author)
 
 	type scored struct {
 		cart  bbsindex.BBSCart
@@ -135,8 +135,8 @@ func Candidates(title, author string, index []bbsindex.BBSCart, n int) []bbsinde
 	}
 	all := make([]scored, len(index))
 	for i, c := range index {
-		s := titleScore(nt, normalize(c.Title))
-		if na != "" && normalize(c.Author) == na {
+		s := titleScore(nt, Normalize(c.Title))
+		if na != "" && Normalize(c.Author) == na {
 			s += 0.05
 		}
 		all[i] = scored{c, s}

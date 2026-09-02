@@ -18,19 +18,26 @@ const (
 )
 
 var (
-	bg    = color.RGBA{16, 16, 20, 255}
-	white = color.RGBA{255, 255, 255, 255}
-	black = color.RGBA{0, 0, 0, 255}
+	bg         = color.RGBA{16, 16, 20, 255}
+	white      = color.RGBA{255, 255, 255, 255}
+	black      = color.RGBA{0, 0, 0, 255}
+	deleteGrey = color.RGBA{120, 120, 120, 255}
 )
+
+func lerpRGBA(a, b color.RGBA, t float64) color.RGBA {
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
+	lerp := func(x, y uint8) uint8 { return uint8(float64(x) + (float64(y)-float64(x))*t) }
+	return color.RGBA{lerp(a.R, b.R), lerp(a.G, b.G), lerp(a.B, b.B), lerp(a.A, b.A)}
+}
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	screen.Fill(bg)
 
 	switch g.state {
-	case stateAwaitPico8Tab, statePickingPico8:
-		g.drawMessage(screen, "hit [tab] to select your pico-8 app")
-	case stateAwaitCartsTab, statePickingCarts:
-		g.drawMessage(screen, "hit [tab] to select your carts folder")
 	case stateNoCarts:
 		g.drawMessage(screen, "no carts found")
 	case stateBrowsing:
@@ -45,38 +52,49 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 }
 
-// drawResolveBBS renders the [Tab] picker: the badged cart's name, a
-// window of options around the current selection (narrowed candidates for
-// "?", or a scrollable/type-ahead-searchable slice of the entire BBS index
-// for "!"), the selection inverted, and the keys to confirm or bail out —
-// this app's one deliberate exception to "never show a dialog," since
-// resolving a match is inherently a pick-one-of-several choice.
+// drawResolveBBS renders the [Tab] picker: the badged cart's name, an
+// editable search box (resolveQuery, live), and a scrollable window of
+// re-ranked suggestions below it with the selection inverted — this app's
+// one deliberate exception to "never show a dialog," since resolving a
+// match is inherently a pick-one-of-several choice.
 func (g *Game) drawResolveBBS(screen *ebiten.Image) {
 	if g.font == nil {
 		return
 	}
 	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
 	cx := float64(w) / 2
-	n := len(g.resolveOptions)
+	n := len(g.resolveSuggestions)
 
 	rowH := listRowHeight()
-	radius := int(float64(h)/2/rowH/2) + 1
-	if radius > n/2 {
+	labelY := float64(h) * 0.14
+	queryY := labelY + rowH*1.4
+	listTop := queryY + rowH*1.2
+	listBottom := float64(h) - rowH*1.8
+
+	visible := int((listBottom - listTop) / rowH)
+	if visible < 3 {
+		visible = 3
+	}
+	radius := visible / 2
+	if n > 0 && radius > n/2 {
 		radius = n / 2
 	}
-	visible := radius*2 + 1
-	top := float64(h)/2 - rowH*float64(visible)/2
 
-	header := "match: " + g.resolveCart
-	if g.resolveTypeahead != "" {
-		header += "   /" + g.resolveTypeahead
+	headerLabel := "match: " + g.resolveCart
+	if g.resolveAdding {
+		headerLabel = "add cart"
 	}
-	g.font.draw(screen, strings.ToUpper(header), cx, top-rowH, listScale, white, alignCenter)
+	g.font.draw(screen, strings.ToUpper(headerLabel), cx, labelY, listScale, white, alignCenter)
 
+	queryLabel := strings.ToUpper(g.resolveQuery) + "_"
+	fillRect(screen, float64(w)/4, queryY-rowH/2, float64(w)/2, rowH, white)
+	g.font.draw(screen, queryLabel, cx, queryY, listScale, black, alignCenter)
+
+	listCenterY := listTop + rowH*float64(radius)
 	for off := -radius; off <= radius; off++ {
 		idx := wrap(g.resolveSel+off, n)
-		c := g.resolveOptions[idx]
-		y := top + float64(off+radius)*rowH
+		c := g.resolveSuggestions[idx]
+		y := listCenterY + float64(off)*rowH
 		col := white
 		if idx == g.resolveSel {
 			fillRect(screen, 0, y-rowH/2, float64(w), rowH, white)
@@ -85,9 +103,6 @@ func (g *Game) drawResolveBBS(screen *ebiten.Image) {
 		label := strings.ToUpper(c.Title + " / " + c.Author)
 		g.font.draw(screen, label, cx, y, listScale, col, alignCenter)
 	}
-
-	hintY := top + float64(visible)*rowH + rowH
-	g.font.draw(screen, "[enter] confirm   [esc] cancel   type to jump", cx, hintY, 1, white, alignCenter)
 }
 
 func (g *Game) drawMessage(screen *ebiten.Image, msg string) {
@@ -148,12 +163,20 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 		tileH := centerH * scale
 		tileX := cx + dist*gap
 
+		// The focused tile mid-delete gets nudged down once armed, and
+		// the fill/armed overlay drawn below is anchored to this cy too.
+		cyDraw := cy
+		deleting := off == 0 && g.deleteState != deleteStateNone && cart.Name == g.deleteCartName
+		if deleting && g.deleteState == deleteStateArmed {
+			cyDraw += tileH * 0.06
+		}
+
 		if img := g.thumbnail(cart.Image); img != nil {
 			iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
 			s := tileH / float64(ih)
 			opt := &ebiten.DrawImageOptions{}
 			opt.GeoM.Scale(s, s)
-			opt.GeoM.Translate(tileX-float64(iw)*s/2, cy-float64(ih)*s/2)
+			opt.GeoM.Translate(tileX-float64(iw)*s/2, cyDraw-float64(ih)*s/2)
 			opt.ColorScale.ScaleAlpha(alpha)
 			screen.DrawImage(img, opt)
 		} else {
@@ -161,11 +184,18 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 			// read as visibly bigger than the actual carts next to it.
 			const placeholderInset = 0.94
 			pw, ph := tileH*cartAspect*placeholderInset, tileH*placeholderInset
-			g.drawPlaceholderCart(screen, tileX-pw/2, cy-ph/2, pw, ph, alpha, cart.Name)
+			g.drawPlaceholderCart(screen, tileX-pw/2, cyDraw-ph/2, pw, ph, alpha, cart.Name)
+		}
+
+		if deleting {
+			pw, ph := tileH*cartAspect, tileH
+			fillY := cyDraw - ph/2
+			fillH := ph * g.deleteProgress
+			fillRect(screen, tileX-pw/2, fillY, pw, fillH, white)
 		}
 
 		if marks := g.marksFor(cart.Name); marks != "" {
-			g.font.draw(screen, marks, tileX, cy+tileH/2+float64(glyphCellH), 1, color.RGBA{255, 255, 255, uint8(255 * alpha)}, alignCenter)
+			g.font.draw(screen, marks, tileX, cyDraw+tileH/2+float64(glyphCellH), 1, color.RGBA{255, 255, 255, uint8(255 * alpha)}, alignCenter)
 		}
 	}
 }
@@ -284,7 +314,15 @@ func (g *Game) drawList(screen *ebiten.Image) {
 	base := int(math.Round(g.pos))
 	frac := g.pos - float64(base)
 
-	fillRect(screen, 0, barY-rowH/2, float64(w), rowH, white)
+	selCart, hasSel := g.selectedCart()
+	deleting := hasSel && g.deleteState != deleteStateNone && selCart.Name == g.deleteCartName
+	barColor := color.Color(white)
+	textShift := 0.0
+	if deleting {
+		barColor = lerpRGBA(white, deleteGrey, g.deleteProgress)
+		textShift = -40 * g.deleteProgress
+	}
+	fillRect(screen, 0, barY-rowH/2, float64(w), rowH, barColor)
 
 	for off := -radius; off <= radius; off++ {
 		idx := wrap(base+off, n)
@@ -292,8 +330,12 @@ func (g *Game) drawList(screen *ebiten.Image) {
 		rowY := barY + (float64(off)-frac)*rowH
 
 		col := white
+		rowX := textX
 		if math.Abs(rowY-barY) < rowH/2 {
 			col = black
+			if deleting {
+				rowX += textShift
+			}
 		}
 
 		label := strings.ToUpper(cart.Name)
@@ -301,7 +343,7 @@ func (g *Game) drawList(screen *ebiten.Image) {
 			label += " " + marks
 		}
 		name := g.font.truncate(label, maxTextW, listScale)
-		g.font.draw(screen, name, textX, rowY, listScale, col, alignStart)
+		g.font.draw(screen, name, rowX, rowY, listScale, col, alignStart)
 	}
 }
 
