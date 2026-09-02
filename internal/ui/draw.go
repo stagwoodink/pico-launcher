@@ -10,8 +10,6 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
-
-	"github.com/stagwoodink/pico-launcher/internal/carts"
 )
 
 const (
@@ -78,11 +76,11 @@ const (
 	caraselMinAlpha = 0.15
 )
 
-// drawCarasel renders the cover-art carasel across the full window,
-// coverflow-style: tiles slide continuously with g.pos (not just snapping
-// between integer selections), shrinking, fading, and tilting away in
-// perspective the further they are from center. Carts with no cover image
-// get a hairline placeholder tile with their title centered.
+// drawCarasel renders the cover-art carasel across the full window: tiles
+// slide continuously with g.pos (not just snapping between integer
+// selections), shrinking and fading the further they are from center.
+// Carts with no cover image get a hairline placeholder tile with their
+// title centered.
 func (g *Game) drawCarasel(screen *ebiten.Image) {
 	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
 	cx, cy := float64(w)/2, float64(h)/2
@@ -110,68 +108,22 @@ func (g *Game) drawCarasel(screen *ebiten.Image) {
 			alpha = caraselMinAlpha
 		}
 		tileH := centerH * scale
-		tileW := tileH * cartAspect
 		tileX := cx + dist*gap
 
-		src := g.thumbnail(cart.Image)
-		if src == nil {
-			src = g.placeholderTile(cart)
+		if img := g.thumbnail(cart.Image); img != nil {
+			iw, ih := img.Bounds().Dx(), img.Bounds().Dy()
+			s := tileH / float64(ih)
+			opt := &ebiten.DrawImageOptions{}
+			opt.GeoM.Scale(s, s)
+			opt.GeoM.Translate(tileX-float64(iw)*s/2, cy-float64(ih)*s/2)
+			opt.ColorScale.ScaleAlpha(alpha)
+			screen.DrawImage(img, opt)
+			continue
 		}
-		drawTilted(screen, src, tileX, cy, tileW, tileH, dist, alpha)
-	}
-}
 
-// placeholderTile rasterizes a cart's hairline placeholder once at a fixed
-// reference size and caches it, so it can be treated exactly like a loaded
-// cover image (including the perspective warp in drawTilted).
-func (g *Game) placeholderTile(cart carts.Cart) *ebiten.Image {
-	key := "placeholder:" + cart.Name
-	if img, ok := g.images[key]; ok {
-		return img
+		tileW := tileH * cartAspect
+		g.drawPlaceholderCart(screen, tileX-tileW/2, cy-tileH/2, tileW, tileH, alpha, cart.Name)
 	}
-	const refH = 256.0
-	refW := refH * cartAspect
-	img := ebiten.NewImage(int(refW), int(refH))
-	g.drawPlaceholderCart(img, 0, 0, refW, refH, 1, cart.Name)
-	g.images[key] = img
-	return img
-}
-
-// drawTilted composites src as a trapezoid instead of a rectangle, faking
-// the perspective rotation of a coverflow-style tile: the edge nearer
-// center keeps full height, the far edge shrinks toward it. dist's sign
-// picks which edge is "near" (left of center tilts one way, right the
-// other); |dist| controls how pronounced the tilt is.
-func drawTilted(screen, src *ebiten.Image, cx, cy, w, h, dist float64, alpha float32) {
-	const maxShrink = 0.55
-	shrink := math.Min(math.Abs(dist), 1) * maxShrink
-	farScale := 1 - shrink
-
-	sign := 1.0
-	if dist < 0 {
-		sign = -1
-	}
-	nearX := float32(cx - sign*w/2)
-	farX := float32(cx + sign*w/2)
-	topNearY, botNearY := float32(cy-h/2), float32(cy+h/2)
-	topFarY := float32(cy - h/2*farScale)
-	botFarY := float32(cy + h/2*farScale)
-
-	b := src.Bounds()
-	srcX0, srcY0, srcX1, srcY1 := float32(b.Min.X), float32(b.Min.Y), float32(b.Max.X), float32(b.Max.Y)
-	srcNearX, srcFarX := srcX0, srcX1
-	if sign < 0 {
-		srcNearX, srcFarX = srcX1, srcX0
-	}
-
-	vs := [4]ebiten.Vertex{
-		{DstX: nearX, DstY: topNearY, SrcX: srcNearX, SrcY: srcY0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: alpha},
-		{DstX: nearX, DstY: botNearY, SrcX: srcNearX, SrcY: srcY1, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: alpha},
-		{DstX: farX, DstY: topFarY, SrcX: srcFarX, SrcY: srcY0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: alpha},
-		{DstX: farX, DstY: botFarY, SrcX: srcFarX, SrcY: srcY1, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: alpha},
-	}
-	idx := [6]uint16{0, 1, 2, 1, 3, 2}
-	screen.DrawTriangles(vs[:], idx[:], src, &ebiten.DrawTrianglesOptions{})
 }
 
 // drawPlaceholderCart draws a hairline outline shaped like an actual PICO-8
