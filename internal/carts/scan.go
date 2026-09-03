@@ -78,11 +78,23 @@ func baseName(name string) string {
 }
 
 // Scan lists carts in dir, deduplicated by base name with the .p8.png
-// version preferred when both exist for the same cart.
+// version preferred when both exist for the same cart. Returns nil on a
+// read error exactly like an empty dir would — callers that need to tell
+// "genuinely empty" apart from "couldn't read it right now" (a rescan while
+// already browsing, where the latter shouldn't wipe what's on screen) should
+// use ScanErr instead.
 func Scan(dir string) []Cart {
+	carts, _ := ScanErr(dir)
+	return carts
+}
+
+// ScanErr is Scan, but reports a read error instead of masking it as "no
+// carts" — a transient failure (dir briefly unmounted, permission hiccup)
+// shouldn't be indistinguishable from every cart having been deleted.
+func ScanErr(dir string) ([]Cart, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	byName := map[string]*Cart{}
 	for _, e := range entries {
@@ -109,7 +121,7 @@ func Scan(dir string) []Cart {
 		out = append(out, *c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
+	return out, nil
 }
 
 // Delete moves a cart's file(s) — its .p8 and/or .p8.png, whichever exist —

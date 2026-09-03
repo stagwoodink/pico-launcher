@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,6 +88,11 @@ type Game struct {
 
 	typeahead   string
 	typeaheadAt time.Time
+
+	// lastCartsScanAt paces startCartsRescan — see cartsRescanInterval.
+	// cartsScanCh is non-nil while a scan is in flight.
+	lastCartsScanAt time.Time
+	cartsScanCh     chan cartsScanResult
 
 	images map[string]*ebiten.Image
 
@@ -230,16 +236,113 @@ func (g *Game) loadCarts() {
 	g.pos, g.target, g.vel = 0, 0, 0
 	g.dragging = false
 	g.state = stateBrowsing
+	g.lastCartsScanAt = time.Now()
 	g.startBBSEnrichment()
 }
 
-// startBBSEnrichment fetches the BBS index and, for every local .p8-only
-// cart (no cover art of its own), matches it and either replaces it
-// silently (confident match) or flags it with a "?" badge (no dialog —
-// this app never surfaces error/prompt UI, see handoff). All of it runs off
-// the Ebiten goroutine; only the finished result is applied to Game state,
-// via bbsResultCh polled from updateBrowsing.
+// cartsRescanInterval is how often the carts dir gets re-scanned for
+// changes made outside the app (added, deleted, renamed) while browsing.
+const cartsRescanInterval = 2 * time.Second
+
+// cartsScanResult carries a background ScanErr result back to the Ebiten
+// goroutine, error included — a transient read failure (dir briefly
+// unmounted, permission hiccup) needs to be told apart from the dir
+// genuinely being empty now, so it can be ignored instead of wiping every
+// cart off the screen until the next successful rescan.
+type cartsScanResult struct {
+	carts []carts.Cart
+	err   error
+}
+
+// startCartsRescan runs carts.ScanErr off the Ebiten goroutine — a slow or
+// networked carts dir shouldn't be able to stall a frame — and applies the
+// result once it lands, polled from updateBrowsing like the other
+// background work (BBS fetch/replace, file pickers).
+func (g *Game) startCartsRescan() {
+	if g.cartsScanCh != nil {
+		return // one scan in flight at a time
+	}
+	dir := g.cfg.CartsDir
+	ch := make(chan cartsScanResult, 1)
+	g.cartsScanCh = ch
+	go func() {
+		found, err := carts.ScanErr(dir)
+		ch <- cartsScanResult{carts: found, err: err}
+	}()
+}
+
+func (g *Game) pollCartsRescan() {
+	if g.cartsScanCh == nil {
+		return
+	}
+	select {
+	case res := <-g.cartsScanCh:
+		g.cartsScanCh = nil
+		if res.err != nil {
+			return // transient — leave the current list alone, retry next interval
+		}
+		g.applyCartsRescan(res.carts)
+	default:
+	}
+}
+
+// applyCartsRescan picks up external changes to the carts dir: adds,
+// deletes, and renames all show up as a different carts.Scan result, so
+// this just diffs against baseCarts and applies whatever changed.
+// Newly-appeared .p8-only carts get enriched against whatever BBS index
+// is already loaded, without a fresh network fetch.
+func (g *Game) applyCartsRescan(newBase []carts.Cart) {
+	if slices.Equal(g.baseCarts, newBase) {
+		return
+	}
+
+	oldNames := make(map[string]bool, len(g.baseCarts))
+	for _, c := range g.baseCarts {
+		oldNames[c.Name] = true
+	}
+	var added []carts.Cart
+	for _, c := range newBase {
+		if !oldNames[c.Name] {
+			added = append(added, c)
+		}
+	}
+
+	g.baseCarts = newBase
+	g.rebuildOrder()
+
+	newNames := make(map[string]bool, len(newBase))
+	for _, c := range newBase {
+		newNames[c.Name] = true
+	}
+	for name := range g.bbsBadge {
+		if !newNames[name] {
+			delete(g.bbsBadge, name)
+		}
+	}
+	for name := range g.bbsUnfound {
+		if !newNames[name] {
+			delete(g.bbsUnfound, name)
+		}
+	}
+	if g.bbsLastUndo != nil && !newNames[g.bbsLastUndo.cartName] {
+		g.bbsLastUndo = nil
+	}
+
+	if len(g.bbsIndex) > 0 {
+		g.startBBSEnrichmentFor(added)
+	} else {
+		g.startBBSEnrichment() // index never loaded (or failed) — try again now
+	}
+}
+
+// startBBSEnrichment fetches the BBS index and enriches every local
+// .p8-only cart. All of it runs off the Ebiten goroutine; only the
+// finished result is applied to Game state, via bbsResultCh polled from
+// updateBrowsing.
 func (g *Game) startBBSEnrichment() {
+	if g.bbsResultCh != nil {
+		return // one pass at a time
+	}
 	snapshot := append([]carts.Cart(nil), g.baseCarts...)
 	ch := make(chan bbsEnrichResult, 1)
 	g.bbsResultCh = ch
@@ -249,36 +352,58 @@ func (g *Game) startBBSEnrichment() {
 			ch <- bbsEnrichResult{}
 			return
 		}
-		replaced := map[string]carts.Cart{}
-		badges := map[string]bool{}
-		unfound := map[string]bool{}
-		for _, c := range snapshot {
-			if c.Image != "" || !strings.HasSuffix(strings.ToLower(c.Path), ".p8") {
-				continue
-			}
-			title, author := bbsmatch.ParseP8Meta(c.Path)
-			searchTitle := title
-			if searchTitle == "" {
-				searchTitle = c.Name // cross-reference the filename when there's no title comment to go on
-			}
-			best, _, ok := bbsmatch.Match(searchTitle, author, index)
-			if !ok {
-				if title == "" {
-					unfound[c.Name] = true
-				} else {
-					badges[c.Name] = true
-				}
-				continue
-			}
-			newPath, err := bbsreplace.Replace(c.Path, best.PNGURL)
-			if err != nil {
-				badges[c.Name] = true // a candidate exists, only the download failed
-				continue
-			}
-			replaced[c.Name] = carts.Cart{Name: c.Name, Path: newPath, Image: newPath}
-		}
-		ch <- bbsEnrichResult{index: index, replaced: replaced, badges: badges, unfound: unfound}
+		ch <- enrichCarts(snapshot, index)
 	}()
+}
+
+// startBBSEnrichmentFor is startBBSEnrichment scoped to just the carts in
+// subset (e.g. ones that just appeared in the carts dir) — reuses the
+// already-fetched index instead of hitting the network again.
+func (g *Game) startBBSEnrichmentFor(subset []carts.Cart) {
+	if g.bbsResultCh != nil || len(g.bbsIndex) == 0 || len(subset) == 0 {
+		return
+	}
+	index := g.bbsIndex
+	snapshot := append([]carts.Cart(nil), subset...)
+	ch := make(chan bbsEnrichResult, 1)
+	g.bbsResultCh = ch
+	go func() { ch <- enrichCarts(snapshot, index) }()
+}
+
+// enrichCarts matches every local .p8-only cart in snapshot (no cover art
+// of its own) against index and either replaces it silently (confident
+// match) or flags it with a "?"/"!" badge (no dialog — this app never
+// surfaces error/prompt UI, see handoff).
+func enrichCarts(snapshot []carts.Cart, index []bbsindex.BBSCart) bbsEnrichResult {
+	replaced := map[string]carts.Cart{}
+	badges := map[string]bool{}
+	unfound := map[string]bool{}
+	for _, c := range snapshot {
+		if c.Image != "" || !strings.HasSuffix(strings.ToLower(c.Path), ".p8") {
+			continue
+		}
+		title, author := bbsmatch.ParseP8Meta(c.Path)
+		searchTitle := title
+		if searchTitle == "" {
+			searchTitle = c.Name // cross-reference the filename when there's no title comment to go on
+		}
+		best, _, ok := bbsmatch.Match(searchTitle, author, index)
+		if !ok {
+			if title == "" {
+				unfound[c.Name] = true
+			} else {
+				badges[c.Name] = true
+			}
+			continue
+		}
+		newPath, err := bbsreplace.Replace(c.Path, best.PNGURL)
+		if err != nil {
+			badges[c.Name] = true // a candidate exists, only the download failed
+			continue
+		}
+		replaced[c.Name] = carts.Cart{Name: c.Name, Path: newPath, Image: newPath}
+	}
+	return bbsEnrichResult{index: index, replaced: replaced, badges: badges, unfound: unfound}
 }
 
 // pollBBSEnrichment applies a finished background enrichment pass, if one
@@ -503,6 +628,12 @@ func (g *Game) pollPicker(onResult func(string)) {
 
 func (g *Game) updateBrowsing() {
 	g.pollBBSEnrichment()
+	g.pollCartsRescan()
+
+	if time.Since(g.lastCartsScanAt) > cartsRescanInterval {
+		g.lastCartsScanAt = time.Now()
+		g.startCartsRescan()
+	}
 
 	ctrl := ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
 	if ctrl && inpututil.IsKeyJustPressed(ebiten.KeyZ) && g.bbsLastUndo != nil {

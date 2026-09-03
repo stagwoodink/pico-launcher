@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/stagwoodink/pico-launcher/internal/bbsindex"
+	"github.com/stagwoodink/pico-launcher/internal/textnorm"
 )
 
 const (
@@ -74,7 +75,7 @@ func main() {
 func latestPerGame(carts []bbsindex.BBSCart) []bbsindex.BBSCart {
 	newest := map[string]bbsindex.BBSCart{}
 	for _, c := range carts {
-		key := normalizeKey(c.Title) + "|" + normalizeKey(c.Author)
+		key := textnorm.Normalize(c.Title) + "|" + textnorm.Normalize(c.Author)
 		if cur, ok := newest[key]; !ok || c.TID > cur.TID {
 			newest[key] = c
 		}
@@ -84,16 +85,6 @@ func latestPerGame(carts []bbsindex.BBSCart) []bbsindex.BBSCart {
 		out = append(out, c)
 	}
 	return out
-}
-
-func normalizeKey(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
 
 // writeIndex refuses to overwrite a healthy existing index with an empty or

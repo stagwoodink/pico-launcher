@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/stagwoodink/pico-launcher/internal/bbsindex"
+	"github.com/stagwoodink/pico-launcher/internal/textnorm"
 )
 
 // Threshold is the minimum similarity score (0..1) for an automatic match.
@@ -81,13 +82,7 @@ func ParseP8Meta(path string) (title, author string) {
 // Normalize lowercases and strips everything but letters/digits, so
 // "Oswald the Lucky Rabbit!" and "oswald_the_lucky_rabbit" compare equal.
 func Normalize(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return textnorm.Normalize(s)
 }
 
 // Match finds the best BBS index entry for a local cart's title/author.

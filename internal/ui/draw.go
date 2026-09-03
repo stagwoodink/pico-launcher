@@ -347,6 +347,14 @@ func (g *Game) drawList(screen *ebiten.Image) {
 	}
 }
 
+// thumbnailCacheCap bounds how many cover images stay decoded on the GPU at
+// once. The carasel only ever shows 5, but a long browsing session would
+// otherwise cache every cart ever scrolled past — on a library of thousands
+// of carts that's thousands of textures held forever. Once the cap is hit
+// the whole cache is dropped; the handful on screen just reload next frame,
+// a cost far smaller than holding the whole library resident.
+const thumbnailCacheCap = 200
+
 // thumbnail lazily loads and caches a cart's cover image.
 func (g *Game) thumbnail(path string) *ebiten.Image {
 	if path == "" {
@@ -364,15 +372,18 @@ func (g *Game) thumbnail(path string) *ebiten.Image {
 	if err != nil {
 		return nil
 	}
+	if len(g.images) >= thumbnailCacheCap {
+		g.images = map[string]*ebiten.Image{}
+	}
 	img := ebiten.NewImageFromImage(src)
 	g.images[path] = img
 	return img
 }
 
+// fillRect draws a solid rect via the vector rasterizer — no per-call
+// texture allocation, unlike an ebiten.NewImage(w,h)+Fill+Draw each frame
+// would cost (this used to run that way, allocating and uploading a fresh
+// GPU texture every single frame for every bar/highlight drawn).
 func fillRect(screen *ebiten.Image, x, y, w, h float64, c color.Color) {
-	sub := ebiten.NewImage(int(w), int(h))
-	sub.Fill(c)
-	opt := &ebiten.DrawImageOptions{}
-	opt.GeoM.Translate(x, y)
-	screen.DrawImage(sub, opt)
+	vector.DrawFilledRect(screen, float32(x), float32(y), float32(w), float32(h), c, false)
 }

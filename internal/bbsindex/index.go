@@ -7,11 +7,11 @@ package bbsindex
 
 import (
 	"encoding/json"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/stagwoodink/pico-launcher/internal/httpfetch"
 )
 
 // BBSCart is one cart as published on the PICO-8 BBS.
@@ -40,7 +40,7 @@ func cachePath() string {
 // erroring the launcher over.
 func Fetch() ([]BBSCart, error) {
 	cache := cachePath()
-	if body, err := download(IndexURL); err == nil {
+	if body, err := httpfetch.Get(IndexURL, 10*time.Second); err == nil {
 		if cache != "" {
 			_ = os.MkdirAll(filepath.Dir(cache), 0o755)
 			_ = os.WriteFile(cache, body, 0o644)
@@ -56,23 +56,6 @@ func Fetch() ([]BBSCart, error) {
 	}
 	return decode(body)
 }
-
-func download(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &httpStatusError{resp.StatusCode}
-	}
-	return io.ReadAll(resp.Body)
-}
-
-type httpStatusError struct{ code int }
-
-func (e *httpStatusError) Error() string { return http.StatusText(e.code) }
 
 func decode(body []byte) ([]BBSCart, error) {
 	var carts []BBSCart

@@ -8,13 +8,25 @@ import (
 	"testing"
 
 	"github.com/stagwoodink/pico-launcher/internal/carts"
+	"github.com/stagwoodink/pico-launcher/internal/httpfetch"
 )
 
+// newTestServer starts an httptest TLS server (Get refuses plain http) and
+// points httpfetch.Transport at its trusted client for the duration of t.
+func newTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTLSServer(handler)
+	t.Cleanup(srv.Close)
+	prev := httpfetch.Transport
+	httpfetch.Transport = srv.Client().Transport
+	t.Cleanup(func() { httpfetch.Transport = prev })
+	return srv
+}
+
 func TestReplace(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("fake png bytes"))
-	}))
-	defer srv.Close()
+	})
 
 	dir := t.TempDir()
 	cartPath := filepath.Join(dir, "mycart.p8")
@@ -44,10 +56,9 @@ func TestReplace(t *testing.T) {
 func TestReplacePNGSource(t *testing.T) {
 	// Shift+Tab can force-open the picker on a cart that already has real
 	// art (.p8.png) — Replace must handle that path shape too.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("new png bytes"))
-	}))
-	defer srv.Close()
+	})
 
 	dir := t.TempDir()
 	cartPath := filepath.Join(dir, "mycart.p8.png")
@@ -79,10 +90,9 @@ func TestUndo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("fake png bytes"))
-	}))
-	defer srv.Close()
+	})
 
 	newPath, err := Replace(cartPath, srv.URL)
 	if err != nil {
@@ -97,5 +107,35 @@ func TestUndo(t *testing.T) {
 	got, err := os.ReadFile(cartPath)
 	if err != nil || string(got) != "-- mycart\n" {
 		t.Fatalf("original .p8 not restored: %q, err=%v", got, err)
+	}
+}
+
+// TestUndoSamePath covers Shift+Tab replacing a cart that was already a
+// .p8.png: cartPath and newPath are the same file, so Undo must remove
+// before restoring or the restored original gets deleted right back out.
+func TestUndoSamePath(t *testing.T) {
+	dir := t.TempDir()
+	cartPath := filepath.Join(dir, "mycart.p8.png")
+	if err := os.WriteFile(cartPath, []byte("old png bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("new png bytes"))
+	})
+
+	newPath, err := Replace(cartPath, srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newPath != cartPath {
+		t.Fatalf("expected same path, got %s vs %s", newPath, cartPath)
+	}
+	if err := Undo(cartPath, newPath); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(cartPath)
+	if err != nil || string(got) != "old png bytes" {
+		t.Fatalf("original .p8.png not restored: %q, err=%v", got, err)
 	}
 }

@@ -4,14 +4,13 @@
 package bbsreplace
 
 import (
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/stagwoodink/pico-launcher/internal/carts"
+	"github.com/stagwoodink/pico-launcher/internal/httpfetch"
 )
 
 // Replace downloads pngURL and swaps it in for cartPath — a .p8 *or* a
@@ -22,7 +21,7 @@ import (
 // for a shared base name, so this alone is what makes the app pick it up.
 // Returns the new file's path.
 func Replace(cartPath, pngURL string) (string, error) {
-	body, err := download(pngURL)
+	body, err := httpfetch.Get(pngURL, 20*time.Second)
 	if err != nil {
 		return "", err
 	}
@@ -38,24 +37,40 @@ func Replace(cartPath, pngURL string) (string, error) {
 
 	newPath := newPathFor(cartPath)
 	if err := os.WriteFile(newPath, body, 0o644); err != nil {
+		// Put the original back so a write failure (disk full, permissions)
+		// never leaves the cart stranded in the backup folder with nothing
+		// in its place.
+		_ = os.Rename(BackupPath(cartPath), cartPath)
 		return "", err
 	}
 	return newPath, nil
 }
 
 // Undo reverses a Replace: removes the downloaded newPath and moves the
-// backed-up original back to cartPath.
+// backed-up original back to cartPath. cartPath and newPath can be the same
+// file (Shift+Tab replacing a cart that was already a .p8.png) — in that
+// case the remove must run first, or restoring the original would just get
+// immediately deleted again. When they differ, restoring first is safer: a
+// failure on the remove step then leaves a harmless leftover .p8.png next
+// to the recovered original, rather than losing the cart entirely if the
+// rename never runs.
 func Undo(cartPath, newPath string) error {
-	if err := os.Remove(newPath); err != nil {
+	if cartPath == newPath {
+		if err := os.Remove(newPath); err != nil {
+			return err
+		}
+		return os.Rename(BackupPath(cartPath), cartPath)
+	}
+	if err := os.Rename(BackupPath(cartPath), cartPath); err != nil {
 		return err
 	}
-	return os.Rename(BackupPath(cartPath), cartPath)
+	return os.Remove(newPath)
 }
 
 // Download saves pngURL directly to destPath — for adding a brand-new
 // cart, where there's no existing file to back up or swap.
 func Download(destPath, pngURL string) error {
-	body, err := download(pngURL)
+	body, err := httpfetch.Get(pngURL, 20*time.Second)
 	if err != nil {
 		return err
 	}
@@ -75,20 +90,3 @@ func newPathFor(cartPath string) string {
 	base = strings.TrimSuffix(base, ".p8")
 	return base + ".p8.png"
 }
-
-func download(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, &statusError{resp.StatusCode}
-	}
-	return io.ReadAll(resp.Body)
-}
-
-type statusError struct{ code int }
-
-func (e *statusError) Error() string { return http.StatusText(e.code) }
