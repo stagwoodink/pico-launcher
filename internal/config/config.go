@@ -21,6 +21,14 @@ type Config struct {
 	// the UI layer, not stored here.
 	RecentNames   []string `json:"recent_names,omitempty"`
 	FavoriteNames []string `json:"favorite_names,omitempty"`
+
+	// Order is the user's manually-arranged cart order (Shift+arrow), most
+	// recently overwritten in full on every reorder. Empty until the user
+	// reorders anything, at which point the default alphabetical order
+	// applies instead. A name in here that no longer has a matching cart is
+	// harmless — it's just skipped — and any cart missing from here (new
+	// since the last reorder) is appended alphabetically after it.
+	Order []string `json:"order,omitempty"`
 }
 
 // TouchRecent moves name to the front of RecentNames (adding it if new)

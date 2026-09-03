@@ -77,6 +77,36 @@ func baseName(name string) string {
 	return name
 }
 
+// ApplyOrder reorders cs to match order: carts named in order come first, in
+// that sequence; any cart not mentioned (new since the order was last saved)
+// keeps its relative position from cs, appended after. A name in order with
+// no matching cart (deleted since) is silently skipped. An empty order
+// returns cs unchanged, i.e. no manual order overrides the default
+// alphabetical scan result.
+func ApplyOrder(cs []Cart, order []string) []Cart {
+	if len(order) == 0 {
+		return cs
+	}
+	byName := make(map[string]Cart, len(cs))
+	for _, c := range cs {
+		byName[c.Name] = c
+	}
+	out := make([]Cart, 0, len(cs))
+	placed := make(map[string]bool, len(order))
+	for _, name := range order {
+		if c, ok := byName[name]; ok {
+			out = append(out, c)
+			placed[name] = true
+		}
+	}
+	for _, c := range cs {
+		if !placed[c.Name] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // Scan lists carts in dir, deduplicated by base name with the .p8.png
 // version preferred when both exist for the same cart. Returns nil on a
 // read error exactly like an empty dir would — callers that need to tell

@@ -37,6 +37,9 @@ Every cart is always in play — how it's shown just depends on the view:
   recents block, even if this launch is what just pinned the cart there —
   you stay put on whichever copy you were looking at.
 - **`Space`**: favorite/unfavorite the current cart (marked `*`).
+- **Shift + `←`/`→`/`↑`/`↓`**: reorder — swaps the selected cart with its
+  neighbor instead of moving the selection, so the cart stays put while the
+  list shifts around it. Saved immediately as your new permanent order.
 
 Up to 3 recently-launched carts are pinned at the very front (newest
 first, marked `~`), followed by your favorites (alphabetical, marked
@@ -119,8 +122,9 @@ the GitHub Release.
 
 A single JSON file at your OS's standard config dir
 (`~/.config/pico-launcher/config.json` on Linux, etc.) stores the resolved
-PICO-8 path, carts folder, recents, and favorites. Delete it to reset
-everything, or hand-edit it if you just want to clear recents/favorites.
+PICO-8 path, carts folder, recents, favorites, and your manual sort order.
+Delete it to reset everything, or hand-edit it if you just want to clear
+recents/favorites/order.
 
 ## License
 

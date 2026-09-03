@@ -231,7 +231,7 @@ func (g *Game) loadCarts() {
 		g.state = stateNoCarts
 		return
 	}
-	g.baseCarts = all
+	g.baseCarts = carts.ApplyOrder(all, g.cfg.Order)
 	g.rebuildOrder()
 	g.pos, g.target, g.vel = 0, 0, 0
 	g.dragging = false
@@ -292,6 +292,7 @@ func (g *Game) pollCartsRescan() {
 // Newly-appeared .p8-only carts get enriched against whatever BBS index
 // is already loaded, without a fresh network fetch.
 func (g *Game) applyCartsRescan(newBase []carts.Cart) {
+	newBase = carts.ApplyOrder(newBase, g.cfg.Order)
 	if slices.Equal(g.baseCarts, newBase) {
 		return
 	}
@@ -676,7 +677,17 @@ func (g *Game) updateBrowsing() {
 		return
 	}
 
-	if len(g.allCarts) > 0 && !g.dragging {
+	navShift := ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
+	if navShift && len(g.allCarts) > 0 && !g.dragging {
+		// Shift+arrow: reorder in place instead of moving the selection —
+		// the cart stays under the cursor, its neighbor swaps position.
+		if inpututil.IsKeyJustPressed(ebiten.KeyLeft) || inpututil.IsKeyJustPressed(ebiten.KeyUp) {
+			g.reorderSelected(-1)
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyRight) || inpututil.IsKeyJustPressed(ebiten.KeyDown) {
+			g.reorderSelected(1)
+		}
+	} else if len(g.allCarts) > 0 && !g.dragging {
 		prevDuration := max(
 			keyDuration(ebiten.KeyLeft), keyDuration(ebiten.KeyUp),
 			padDuration(dpadLeft), padDuration(dpadUp),
@@ -706,6 +717,42 @@ func (g *Game) updateBrowsing() {
 	if trigger {
 		g.launchSelected()
 	}
+}
+
+// reorderSelected swaps the selected cart with its neighbor (dir -1: prev,
+// +1: next) within the base cart list and saves the result as the user's
+// new permanent order. Operates on baseCarts (the underlying alphabetical
+// list), not the on-screen allCarts, so it's unaffected by which recents/
+// favorites duplicate happens to be focused right now.
+func (g *Game) reorderSelected(dir int) {
+	cart, ok := g.selectedCart()
+	if !ok {
+		return
+	}
+	n := len(g.baseCarts)
+	if n < 2 {
+		return
+	}
+	idx := -1
+	for i, c := range g.baseCarts {
+		if c.Name == cart.Name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return
+	}
+	j := wrap(idx+dir, n)
+	g.baseCarts[idx], g.baseCarts[j] = g.baseCarts[j], g.baseCarts[idx]
+
+	order := make([]string, n)
+	for i, c := range g.baseCarts {
+		order[i] = c.Name
+	}
+	g.cfg.Order = order
+	g.cfg.Save()
+	g.rebuildOrder()
 }
 
 // toggleFavorite stars/unstars the current selection and re-derives the
@@ -809,7 +856,7 @@ func (g *Game) selfHeal(cart carts.Cart) bool {
 	}
 	if _, err := os.Stat(cart.Path); err != nil {
 		if all := carts.Scan(g.cfg.CartsDir); all != nil {
-			g.baseCarts = all
+			g.baseCarts = carts.ApplyOrder(all, g.cfg.Order)
 			g.rebuildOrder()
 			healed = true
 		}
@@ -914,7 +961,13 @@ func (g *Game) updateResolvingBBS() {
 			if res.ok {
 				if res.adding {
 					g.baseCarts = append(g.baseCarts, res.cart)
-					sort.Slice(g.baseCarts, func(i, j int) bool { return g.baseCarts[i].Name < g.baseCarts[j].Name })
+					if len(g.cfg.Order) == 0 {
+						sort.Slice(g.baseCarts, func(i, j int) bool { return g.baseCarts[i].Name < g.baseCarts[j].Name })
+					} else {
+						// A custom order is active: drop the new cart in at
+						// the end rather than disturbing the arrangement.
+						g.baseCarts = carts.ApplyOrder(g.baseCarts, g.cfg.Order)
+					}
 					g.bbsLastUndo = &bbsUndo{kind: undoKindAdd, cartName: res.cart.Name, newPath: res.cart.Path}
 				} else {
 					delete(g.bbsBadge, res.name)
